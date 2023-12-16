@@ -14,7 +14,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from .functional import softermax
-from .configuration_llama import SofterLlamaConfig
+from .configuration_softerllama import SofterLlamaConfig
 
 from transformers.utils import logging
 from transformers.cache_utils import Cache, DynamicCache
