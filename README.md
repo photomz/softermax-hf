@@ -9,6 +9,6 @@ We name the subclassed huggingface model SofterLlama (mainly so IDE autocomplete
 
 Coincidentally, our timing on adapting llama falls under a [massive PR](https://github.com/huggingface/transformers/pull/26681) refactoring kv cache utils, partially motivated by
 [attention sinks](http://arxiv.org/abs/2309.17453) which is tangentially related to softermax (main difference being our inital "token" that serves as an 
-"attention sink" doesn't have a corresponding V matrix entry). \
+"attention sink" doesn't have a corresponding V matrix entry).
 
 Since this is the case, we must use transformers==4.36.1 onwards as the latest version to have access to the Cache object.
