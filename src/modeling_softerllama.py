@@ -271,7 +271,7 @@ class SofterLlamaDecoderLayer(LlamaDecoderLayer):
         # https://github.com/huggingface/transformers/blob/c48787f347bd604f656c2cfff730e029c8f8c1fe/src/transformers/models/llama/modeling_llama.py#L756
         # also, since the original llama version supports multiple attention implementations, but ours only supports eager version softermax, throw a warning in
         # case the _attn_implementation is set to flash_attention_2 or sdpa
-        if config._attn_implementation is not "eager":
+        if config._attn_implementation != "eager":
             logger.warning_once(
                 f"Original config._attn_implementation of {config._attn_implementation}, replacing with eager softermax attention implementation."
             )

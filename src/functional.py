@@ -22,7 +22,7 @@ def softermax(
     Normally when computing a softmax, the maxes are subtracted from the inputs for numeric stability.
     """
     # compute the maxes along the last dimension
-    input_maxes = input.max(dim=dim, keepdim=True).values
+    input_maxes = input.max(dim=dim, keepdim=True).values.detach()
     # shift the input to prevent overflow (and underflow in the denominator)
     shifted_inputs = torch.subtract(input, input_maxes)
     # compute the numerator and softmax_0 denominator using the shifted input
