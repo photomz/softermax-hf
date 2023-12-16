@@ -11,7 +11,7 @@ from torch import Tensor
 # Ref: https://github.com/softmax1/EsperBERTo/blob/946f0a9fa0f6e3b2bf755388d8fa20c31f8e2bf5/src/functional.py#L49
 def softermax(
     input: Tensor,
-    n_bias: float,
+    n_bias: float = 0.0,
     dim: Optional[int] = None,
     dtype: Optional[_dtype] = None,
 ) -> Tensor:
