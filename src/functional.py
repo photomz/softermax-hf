@@ -3,18 +3,16 @@ softermax implementation
 """
 
 from typing import Optional
-from torch.types import _dtype
+
 import torch
-from torch import Tensor
+import torch.nn.functional as F
+from torch.types import _dtype
 
 
 # Ref: https://github.com/softmax1/EsperBERTo/blob/946f0a9fa0f6e3b2bf755388d8fa20c31f8e2bf5/src/functional.py#L49
 def softermax(
-    input: Tensor,
-    n_bias: float = 0.0,
-    dim: Optional[int] = -1,
-    dtype: Optional[_dtype] = None,
-) -> Tensor:
+    input: torch.Tensor, n_bias: float = 0.0, dim: Optional[int] = -1, dtype: Optional[_dtype] = None
+) -> torch.Tensor:
     """
     $\text(softmax)_n(x_i) = exp(x_i) / (n + \sum_j exp(x_j))$
 
@@ -32,3 +30,21 @@ def softermax(
     # and then add this contribution to the denominator
     scores = numerator / (denominator + shifted_bias)
     return scores if dtype is None else scores.type(dtype=dtype)
+
+
+# Ref: https://github.com/Qualcomm-AI-research/outlier-free-transformers/blob/1e59744972da808a90d9996027bfc274689594b8/transformers_language/models/softmax.py#L8
+def clipped_softmax(input: torch.Tensor, dim: int = -1, gamma: float = 0.0, eta: float = 1.0, **kwargs) -> torch.Tensor:
+    """clip((eta - gamma) * softmax(x) + gamma) in [0,1], eta >= 1, gamma <= 0.
+
+    Exact zeros can fix outliers, so fix eta = 1 (no upper clipping) and vary gamma (lower clipping).
+    Normal softmax is clipped_softmax(eta=1, gamma=0).
+    """
+    # F.softmax doesn't support fp16 on CPU
+    score = F.softmax(input, dim=dim, **kwargs)
+    print(score)
+    # Stretch and translate by linear factor
+    stretched_score = score * (eta - gamma) + gamma
+    # Clip each score to [0,1], so sum != 1 anymore.
+    # In fact, every score in attention sum can be 0 or 1.
+    clipped_score = torch.clip(stretched_score, 0, 1)
+    return clipped_score
