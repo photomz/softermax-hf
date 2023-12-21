@@ -1,0 +1,1 @@
+Holds pretrained models in this directory. Gitignores all models as we obviously don't want to commit them all to Github.
