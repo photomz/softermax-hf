@@ -1,0 +1,14 @@
+# Testing
+pytest
+syrupy
+# HuggingFace
+transformers @ git+https://github.com/huggingface/transformers
+datasets
+evaluate
+tokenizers
+accelerate
+torch==2.1.0
+# Formatters
+black
+ruff
+autopep8

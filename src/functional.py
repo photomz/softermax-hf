@@ -12,7 +12,7 @@ from torch import Tensor
 def softermax(
     input: Tensor,
     n_bias: float = 0.0,
-    dim: Optional[int] = None,
+    dim: Optional[int] = -1,
     dtype: Optional[_dtype] = None,
 ) -> Tensor:
     """
@@ -24,15 +24,11 @@ def softermax(
     # compute the maxes along the last dimension
     input_maxes = input.max(dim=dim, keepdim=True).values.detach()
     # shift the input to prevent overflow (and underflow in the denominator)
-    shifted_inputs = torch.subtract(input, input_maxes)
     # compute the numerator and softmax_0 denominator using the shifted input
-    numerator = torch.exp(shifted_inputs)
-    original_denominator = numerator.sum(dim=dim, keepdim=True)
+    numerator = torch.exp(input - input_maxes)
+    denominator = numerator.sum(dim=dim, keepdim=True)
     # we need to shift the zeros in the same way we shifted the inputs
-    shifted_zeros = torch.multiply(input_maxes, -1)
+    shifted_bias = n_bias * torch.exp(-input_maxes)
     # and then add this contribution to the denominator
-    denominator = torch.add(
-        original_denominator, torch.multiply(torch.exp(shifted_zeros), n_bias)
-    )
-    output = torch.divide(numerator, denominator)
-    return output if dtype is None else output.type(dtype=dtype)
+    scores = numerator / (denominator + shifted_bias)
+    return scores if dtype is None else scores.type(dtype=dtype)
