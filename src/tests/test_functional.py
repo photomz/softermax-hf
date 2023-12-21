@@ -5,6 +5,7 @@ from torch import tensor
 
 from src.functional import clip_logits, softermax
 
+# important: so randn is determinstic every time. if not CPU, set seed on your device.
 torch.manual_seed(42)
 
 
