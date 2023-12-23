@@ -5,7 +5,14 @@ of the softermax models.
 
 from typing import Optional, List, Dict
 from torch.utils.data import Dataset
+
 from transformers import Trainer
+from transformers.utils import logging
+
+from .quantization.quant import quantize
+
+
+logger = logging.get_logger(__name__)
 
 
 class SofterTrainer(Trainer):
@@ -20,27 +27,31 @@ class SofterTrainer(Trainer):
         metric_key_prefix: str = "eval",
     ) -> Dict[str, float]:
         """
-        Run evaluation and returns metrics.
+        Override default evaluate loop to run evaluation metrics for both quantized and unquantized versions of the model.
 
-        The calling script will be responsible for providing a method to compute metrics, as they are task-dependent
-        (pass it to the init `compute_metrics` argument).
-
-        You can also subclass and override this method to inject custom behavior.
-
-        Args:
-            eval_dataset (`Dataset`, *optional*):
-                Pass a dataset if you wish to override `self.eval_dataset`. If it is a [`~datasets.Dataset`], columns
-                not accepted by the `model.forward()` method are automatically removed. It must implement the `__len__`
-                method.
-            ignore_keys (`List[str]`, *optional*):
-                A list of keys in the output of your model (if it is a dictionary) that should be ignored when
-                gathering predictions.
-            metric_key_prefix (`str`, *optional*, defaults to `"eval"`):
-                An optional prefix to be used as the metrics key prefix. For example the metrics "bleu" will be named
-                "eval_bleu" if the prefix is "eval" (default)
 
         Returns:
             A dictionary containing the evaluation loss and the potential metrics computed from the predictions. The
             dictionary also contains the epoch number which comes from the training state.
         """
-        super().evaluate(eval_dataset, ignore_keys, metric_key_prefix="")
+        # first run regular model eval
+        fp16_metrics = super().evaluate(eval_dataset, ignore_keys, metric_key_prefix="fp16")
+
+        # store a ref to the original model while moving it to cpu
+        fp16_model = self.model.to("cpu")
+        # quantize the model
+        logger.info("Quantizing model for eval loop")
+        int8_model = quantize(self.model)
+        # replace current ref to the quantized model
+        self.model = int8_model
+
+        # then run quant model eval
+        int8_metrics = super().evaluate(eval_dataset, ignore_keys, metric_key_prefix="int8")
+
+        # return self.model ref to regular model
+        self.model = fp16_model
+
+        # combine both metric dictionaries into one
+        metrics_dict = fp16_metrics.update(int8_metrics)
+        return metrics_dict
+
