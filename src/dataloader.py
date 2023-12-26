@@ -23,6 +23,8 @@ class BooksCorpusAndWiki:
     # HuggingFace iterable dataset dict.
     datasets: Optional[IterableDatasetDict] = None
     # no. cpu threads. Defaults to # cores - 2.
+    # these are used to determine how many threads will process the streaming
+    # dataset concurrently with model training
     num_workers: int = os.cpu_count() - 2
 
     def setup(self, suffix=""):
@@ -52,14 +54,42 @@ class BooksCorpusAndWiki:
             .map(self.group, batched=True)
         )
 
-    def dataloader(self, split: Literal["split", "validation"] = "train"):
+    def get_trainingargs_dataset_params(self):
+        """
+        Returns in unpackable dictionary object to pass into the instantiation of TrainingArguments
+        Ref: https://huggingface.co/docs/transformers/v4.36.1/en/main_classes/trainer#transformers.TrainingArguments
+        """
+        return {
+            "dataloader_num_workers": self.num_workers,
+            "per_device_train_batch_size": self.batch_size["train"],
+            "per_device_eval_batch_size": self.batch_size["validation"],
+            "data_seed": self.seed,
+        }
+
+    def get_trainer_dataset_params(self):
+        """
+        Returns an unpackable dictionary object to pass into the instantiation of Trainer
+        Ref: https://huggingface.co/docs/transformers/main_classes/trainer#transformers.Trainer
+        """
+        collate_fn = DataCollatorForLanguageModeling(
+            self.tokenizer, mlm=(self.mlm_probability != 0), mlm_probability=self.mlm_probability
+        )
+        return {
+            "train_dataset": self.datasets["train"],
+            "eval_dataset": self.datasets["validation"],
+            "data_collator": collate_fn,
+        }
+
+    def dataloader(self, split: Literal["train", "validation"] = "train"):
         torch.manual_seed(self.seed)
 
         return DataLoader(
             self.datasets[split],
             batch_size=self.batch_size[split],
             num_workers=self.num_workers,
-            collate_fn=DataCollatorForLanguageModeling(self.tokenizer, mlm_probability=self.mlm_probability),
+            collate_fn=DataCollatorForLanguageModeling(
+                self.tokenizer, mlm=(self.mlm_probability != 0), mlm_probability=self.mlm_probability
+            ),
         )
 
     def group(self, example_batch):
