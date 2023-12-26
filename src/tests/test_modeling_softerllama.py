@@ -25,9 +25,7 @@ def softerllama_config() -> SofterLlamaConfig:
 
 @fixture(scope="session")
 def sl_model(softerllama_config) -> SofterLlamaForCausalLM:
-    return SofterLlamaForCausalLM.from_pretrained(
-        "models/softermax-tinyllama-15m.pt", config=softerllama_config
-    ).eval()
+    return SofterLlamaForCausalLM.from_pretrained("models/softermax-tinyllama-15m.pt", config=softerllama_config).eval()
 
 
 def test_softermax0_equal_softmax(tokenizer):
@@ -35,9 +33,7 @@ def test_softermax0_equal_softmax(tokenizer):
 
     sl_0_config = SofterLlamaConfig.from_pretrained("nickypro/tinyllama-15M")
     sl_0_config.n_bias = 0
-    sl_model = SofterLlamaForCausalLM.from_pretrained(
-        "nickypro/tinyllama-15M", config=sl_0_config
-    ).eval()
+    sl_model = SofterLlamaForCausalLM.from_pretrained("nickypro/tinyllama-15M", config=sl_0_config).eval()
     assert sl_model.config.n_bias == 0
 
     inputs = tokenizer("Hello, my dog is cute", return_tensors="pt")
@@ -53,9 +49,7 @@ def test_softermax(sl_model, tokenizer):
 
     # Generate
     generate_ids = sl_model.generate(inputs.input_ids, max_length=30)
-    out = tokenizer.batch_decode(
-        generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
-    )[0]
+    out = tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
 
     # suspend input capture by py.test so user input can be recorded here
     capture_manager = pytest.config.pluginmanager.getplugin("capturemanager")
@@ -74,3 +68,11 @@ def test_loading_and_saving(tmpdir, sl_model):
 
     loaded_model = SofterLlamaForCausalLM.from_pretrained(tmpdir.join("/tinyllama-15M"))
     assert loaded_model.config.n_bias == sl_model.config.n_bias
+
+
+def test_trainer_evaluate():
+    # waiting on implementation of dataloader
+    # this function will pass a dataset validation batch through
+    # the softertrainer evaluate function to verify
+    # the evaluation loop is correct
+    return

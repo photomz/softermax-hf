@@ -34,6 +34,11 @@ class SofterTrainer(Trainer):
             A dictionary containing the evaluation loss and the potential metrics computed from the predictions. The
             dictionary also contains the epoch number which comes from the training state.
         """
+        # store original output_attentions boolean value
+        orig_output_attentions = self.model.config.output_attentions
+        # ensure model will output attention matrix for compute_metrics
+        self.model.config.output_attentions = True
+
         # first run regular model eval
         fp16_metrics = super().evaluate(eval_dataset, ignore_keys, metric_key_prefix="fp16")
 
@@ -50,8 +55,13 @@ class SofterTrainer(Trainer):
 
         # return self.model ref to regular model
         self.model = fp16_model
+        # reset output_attentions to its original value
+        self.model.config.output_attentions = orig_output_attentions
 
         # combine both metric dictionaries into one
         metrics_dict = fp16_metrics.update(int8_metrics)
         return metrics_dict
 
+
+def compute_softermetrics(eval_preds):
+    print(eval_preds)
