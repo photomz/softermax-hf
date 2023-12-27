@@ -50,13 +50,17 @@ class BooksCorpusAndWiki:
             IterableDatasetDict({"train": concatenate_datasets([bookcorpus, wiki_train]), "validation": wiki_val})
             .shuffle(seed=self.seed, buffer_size=self.buffer_size)
             .map(self.encode, batched=True, remove_columns=wiki_val.column_names)
-            .with_format("torch")
             .map(self.group, batched=True)
+            .with_format("torch")
         )
 
-    def get_trainingargs_dataset_params(self):
+        assert isinstance(self.datasets["train"], torch.utils.data.IterableDataset)
+        assert isinstance(self.datasets["validation"], torch.utils.data.IterableDataset)
+
+    @property
+    def training_args(self):
         """
-        Returns in unpackable dictionary object to pass into the instantiation of TrainingArguments
+        Dataset-specific **kwargs to init HuggingFace TrainingArguments
         Ref: https://huggingface.co/docs/transformers/v4.36.1/en/main_classes/trainer#transformers.TrainingArguments
         """
         return {
@@ -66,9 +70,10 @@ class BooksCorpusAndWiki:
             "data_seed": self.seed,
         }
 
-    def get_trainer_dataset_params(self):
+    @property
+    def trainer_params(self):
         """
-        Returns an unpackable dictionary object to pass into the instantiation of Trainer
+        Dataset-specific **kwargs to init HF Trainer
         Ref: https://huggingface.co/docs/transformers/main_classes/trainer#transformers.Trainer
         """
         collate_fn = DataCollatorForLanguageModeling(
