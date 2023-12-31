@@ -6,13 +6,24 @@ PyTest unit testing. Run the unit tests from the root directory using
 import pytest
 from pytest import fixture
 from src import SofterLlamaConfig, SofterLlamaForCausalLM
+from src.dataloader import BooksCorpusAndWiki
+from src.training_utils import SofterTrainer, SofterTrainingArguments
+from src.quantization.quant import default_quant_configs
 from transformers import LlamaConfig, LlamaForCausalLM, LlamaTokenizerFast
 import torch
 
 
+# These tests require Internet to download the dataset, or a precached dataset.
 @fixture(scope="session")
 def tokenizer() -> LlamaTokenizerFast:
     return LlamaTokenizerFast.from_pretrained("nickypro/tinyllama-15M")
+
+
+@fixture(scope="session")
+def bookscorpusandwiki(tokenizer):
+    loader = BooksCorpusAndWiki(tokenizer, mlm_probability=0)
+    loader.setup()
+    return loader
 
 
 @fixture(scope="session")
@@ -25,9 +36,10 @@ def softerllama_config() -> SofterLlamaConfig:
 
 @fixture(scope="session")
 def sl_model(softerllama_config) -> SofterLlamaForCausalLM:
-    return SofterLlamaForCausalLM.from_pretrained("models/softermax-tinyllama-15m.pt", config=softerllama_config).eval()
+    return SofterLlamaForCausalLM.from_pretrained("nickypro/tinyllama-15M", config=softerllama_config).eval()
 
 
+"""
 def test_softermax0_equal_softmax(tokenizer):
     og_model = LlamaForCausalLM.from_pretrained("nickypro/tinyllama-15M").eval()
 
@@ -68,11 +80,19 @@ def test_loading_and_saving(tmpdir, sl_model):
 
     loaded_model = SofterLlamaForCausalLM.from_pretrained(tmpdir.join("/tinyllama-15M"))
     assert loaded_model.config.n_bias == sl_model.config.n_bias
+"""
 
 
-def test_trainer_evaluate():
-    # waiting on implementation of dataloader
+def test_trainer_evaluate(sl_model, bookscorpusandwiki):
     # this function will pass a dataset validation batch through
     # the softertrainer evaluate function to verify
     # the evaluation loop is correct
-    return
+    required_args = {"output_dir": "/tmp", "max_steps": int(1e5), "logging_dir": "/tmp/runs"}
+    trainingargs = SofterTrainingArguments(
+        **bookscorpusandwiki.training_args, quant_kwargs=default_quant_configs, **required_args
+    )
+
+    # Don't snapshot-test Trainer. It has hardware-specific configs, so it's not portable.
+    print(bookscorpusandwiki.trainer_params)
+    trainer = SofterTrainer(sl_model, trainingargs, **bookscorpusandwiki.trainer_params)
+    assert trainer.evaluate()
