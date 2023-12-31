@@ -6,7 +6,12 @@ from typing import Dict, Literal, Optional
 import torch
 from datasets import IterableDatasetDict, concatenate_datasets, load_dataset
 from torch.utils.data import DataLoader
-from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase
+from transformers import (
+    PreTrainedTokenizerBase,
+    DataCollatorForLanguageModeling,
+    DataCollatorWithPadding,
+    DefaultDataCollator,
+)
 
 
 @dataclass
@@ -76,9 +81,15 @@ class BooksCorpusAndWiki:
         Dataset-specific **kwargs to init HF Trainer
         Ref: https://huggingface.co/docs/transformers/main_classes/trainer#transformers.Trainer
         """
-        collate_fn = DataCollatorForLanguageModeling(
-            self.tokenizer, mlm=(self.mlm_probability != 0), mlm_probability=self.mlm_probability
-        )
+        # we initialise different data collators based on causal or masked language modeling
+        if self.mlm_probability:
+            # in MLM we usually only have [CLS] and [SEP] tokens
+            collate_fn = DataCollatorForLanguageModeling(self.tokenizer, mlm=True, mlm_probability=self.mlm_probability)
+        else:
+            # our method of CLM pretraining we chunk the input (see group function) for pretraining with large amounts
+            # of data, hence no [PAD] token. This means the outputs of the dataloader are all `max_seq_len` long.
+            # So here we explicitly use the default data collator which doesn't include any padding, outputting samples as is.
+            collate_fn = DefaultDataCollator(return_tensors="pt")
         return {
             "train_dataset": self.datasets["train"],
             "eval_dataset": self.datasets["validation"],
@@ -117,9 +128,13 @@ class BooksCorpusAndWiki:
         # tokenize the text
         features = self.tokenizer(
             example_batch["text"],
-            max_length=self.max_seq_length,
-            padding="max_length",
+            # TODO: this line is trying to pad but there is no guarantee that we actually have a PAD token instantiated
+            # realistically we shouldn't even try to pad the input. The encode function is called before the group()
+            # which means that we are padding every sample up to max seq length, and then in the group function chunking them
+            # into max_seq_len long chunks, which will now include PAD tokens???
+            # max_length=self.max_seq_length,
+            # padding=False,
             return_special_tokens_mask=True,
-            return_tensors="pt",
+            # return_tensors="pt",
         )
         return features
