@@ -195,7 +195,7 @@ class SofterLlamaAttention(nn.Module):
         # upcast attention to fp32
         # softermax overriding original attention softmax
         attn_weights = softermax(attn_weights, self.n_bias, dim=-1).type(dtype=torch.float32).to(query_states.dtype)
-        attn_weights = clip_logits(attn_weights, self.n_clip, dim=-1)
+        attn_weights = clip_logits(attn_weights, self.n_clip)
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
         attn_output = torch.matmul(attn_weights, value_states)
 
