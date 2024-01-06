@@ -2,6 +2,7 @@ import itertools
 import os
 from dataclasses import dataclass, field
 from typing import Dict, Literal, Optional
+from functools import cached_property
 
 import torch
 from datasets import IterableDatasetDict, concatenate_datasets, load_dataset
@@ -17,16 +18,19 @@ from transformers import (
 @dataclass
 class BooksCorpusAndWiki:
     tokenizer: PreTrainedTokenizerBase
+
     # stream shuffled dataset by batches of buffer_size
     buffer_size: int = 10000
     max_seq_length: int = 128
     batch_size: Dict[str, int] = field(default_factory=lambda: {"train": 32, "validation": 32})
+
     # % tokens to mask for Encoders. Set to 0% to disable for Decoders.
     mlm_probability: float = 0.15
     # random seed for shuffling and masking.
     seed: int = 42
     # HuggingFace iterable dataset dict.
     datasets: Optional[IterableDatasetDict] = None
+
     # no. cpu threads. Defaults to # cores - 2.
     # these are used to determine how many threads will process the streaming
     # dataset concurrently with model training
@@ -62,7 +66,7 @@ class BooksCorpusAndWiki:
         assert isinstance(self.datasets["train"], torch.utils.data.IterableDataset)
         assert isinstance(self.datasets["validation"], torch.utils.data.IterableDataset)
 
-    @property
+    @cached_property
     def training_args(self):
         """
         Dataset-specific **kwargs to init HuggingFace TrainingArguments
@@ -75,7 +79,7 @@ class BooksCorpusAndWiki:
             "data_seed": self.seed,
         }
 
-    @property
+    @cached_property
     def trainer_params(self):
         """
         Dataset-specific **kwargs to init HF Trainer
@@ -98,6 +102,22 @@ class BooksCorpusAndWiki:
             "eval_dataset": self.datasets["validation"],
             "data_collator": collate_fn,
         }
+
+    @cached_property
+    def calibration_split(self):
+        """
+        Dataset-specific calibration samples for GPTQConfig, returned as list of strings (since that's the format they require)
+        The calibration split is equal to the validation split. Important to be a cached_property since it's rather
+        expensive to turn the whole eval dataset into a list every time the getter is called.
+        """
+        return list(self.datasets["validation"].take(self.quant_dataset_size))
+
+    @property
+    def quant_dataset_size(self):
+        # quantization calibration dataset size
+        # original GPTQ paper used 128 random 2048 token segments from the C4 dataset
+        # we match the same token count calculating using max_seq_len parameter
+        return int(128 * 2048 / self.max_seq_length)
 
     def dataloader(self, split: Literal["train", "validation"] = "train"):
         torch.manual_seed(self.seed)

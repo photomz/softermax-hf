@@ -52,8 +52,8 @@ class SofterLlamaAttention(nn.Module):
             )
 
         # MZ: softermax n_bias, clipped softmax n_clip parameters
-        self.n_bias = nn.Parameter(torch.tensor(config.n_bias), requires_grad=config.learn_softmax)
-        self.n_clip = nn.Parameter(torch.tensor(config.n_clip), requires_grad=config.learn_softmax)
+        self.n_bias = nn.Parameter(torch.tensor(config.n_bias, dtype=torch.float32), requires_grad=config.learn_softmax)
+        self.n_clip = nn.Parameter(torch.tensor(config.n_clip, dtype=torch.float32), requires_grad=config.learn_softmax)
 
         self.attention_dropout = config.attention_dropout
         self.hidden_size = config.hidden_size

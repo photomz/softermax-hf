@@ -1,13 +1,18 @@
 """
 PyTest unit testing. Run the unit tests from the root directory using
-`python -m pytest tests/test_modeling_softerllama.py`
+`python -m pytest src/tests/test_modeling_softerllama.py`
 """
 
 import pytest
 from pytest import fixture
 from src import SofterLlamaConfig, SofterLlamaForCausalLM
 from src.dataloader import BooksCorpusAndWiki
-from src.training_utils import SofterTrainer, SofterTrainingArguments
+from src.training_utils import (
+    SofterTrainer,
+    SofterTrainingArguments,
+    compute_softermetrics,
+    preprocess_logits_for_metrics,
+)
 from src.quantization.quant import default_quant_configs
 from transformers import LlamaConfig, LlamaForCausalLM, LlamaTokenizerFast
 import torch
@@ -88,11 +93,25 @@ def test_trainer_evaluate(sl_model, bookscorpusandwiki):
     # the softertrainer evaluate function to verify
     # the evaluation loop is correct
     required_args = {"output_dir": "/tmp", "max_steps": int(1e5), "logging_dir": "/tmp/runs"}
+    print("softertrainingargs")
+    bookscorpusandwiki.batch_size["validation"] = 1
+    print(bookscorpusandwiki.tokenizer)
     trainingargs = SofterTrainingArguments(
-        **bookscorpusandwiki.training_args, quant_kwargs=default_quant_configs, **required_args
+        **bookscorpusandwiki.training_args,
+        # quant_kwargs=default_quant_configs,
+        # quant_dataset=bookscorpusandwiki.calibration_split,
+        # quant_tokenizer=bookscorpusandwiki.tokenizer,
+        eval_accumulation_steps=1,
+        **required_args,
     )
 
     # Don't snapshot-test Trainer. It has hardware-specific configs, so it's not portable.
     print(bookscorpusandwiki.trainer_params)
-    trainer = SofterTrainer(sl_model, trainingargs, **bookscorpusandwiki.trainer_params)
+    trainer = SofterTrainer(
+        sl_model,
+        trainingargs,
+        compute_metrics=compute_softermetrics,
+        # preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+        **bookscorpusandwiki.trainer_params,
+    )
     assert trainer.evaluate()

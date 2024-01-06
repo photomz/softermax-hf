@@ -12,6 +12,20 @@
         description: name of the model class. One of [softerbert, softerllama]
         value: 'softerllama'
 
+    seed:
+        description: seed for the run
+        value: 1337
+
+    # borrowing existing tinyllama configs for 15M model from huggingface hub
+    model_config_src:
+        description: name on huggingface hub/local path to config and tokenizer files
+        value: 'nickypro/tinyllama-15M'
+
+    ### softermax parameters ###
+    n_bias :
+        description:
+        value: 1
+
     ### training configs ###
     batch_size:
         description: training batch size (per gpu device)
@@ -30,13 +44,17 @@
         description: intervals before model is evaluated and checkpoints are saved
         value: 5.0e+3
 
+    eval_accumulation_steps:
+        description:  Number of predictions steps to accumulate the output tensors for, before moving the results to the CPU.
+        value: 20
+
     logging_steps:
         description: intervals before wandb logging
         value: 50
 
     mlm_probability:
         description: probability of mlm masking being applied to a train sequence token (if applicable)
-        value: 0.15
+        value: 0
 
     ### optimization parameters ###
     learning_rate:
