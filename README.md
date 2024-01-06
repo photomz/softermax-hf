@@ -7,6 +7,10 @@ We name the subclassed huggingface model SofterLlama (mainly so IDE autocomplete
 # Devlog
 We track development using this [Google Doc](https://docs.google.com/document/d/1cEiQyOfQDFaNUyDZDg5TjE-439I4S_a2CyiyA9Fuc9Y/edit?usp=sharing)
 
+# Running Train Script
+```
+python train.py --configs configs/softerllama-15M.yaml
+```
 
 # Requirements
 

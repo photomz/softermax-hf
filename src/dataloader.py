@@ -2,26 +2,35 @@ import itertools
 import os
 from dataclasses import dataclass, field
 from typing import Dict, Literal, Optional
+from functools import cached_property
 
 import torch
 from datasets import IterableDatasetDict, concatenate_datasets, load_dataset
 from torch.utils.data import DataLoader
-from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase
+from transformers import (
+    PreTrainedTokenizerBase,
+    DataCollatorForLanguageModeling,
+    DataCollatorWithPadding,
+    DefaultDataCollator,
+)
 
 
 @dataclass
 class BooksCorpusAndWiki:
     tokenizer: PreTrainedTokenizerBase
+
     # stream shuffled dataset by batches of buffer_size
     buffer_size: int = 10000
     max_seq_length: int = 128
     batch_size: Dict[str, int] = field(default_factory=lambda: {"train": 32, "validation": 32})
+
     # % tokens to mask for Encoders. Set to 0% to disable for Decoders.
     mlm_probability: float = 0.15
     # random seed for shuffling and masking.
     seed: int = 42
     # HuggingFace iterable dataset dict.
     datasets: Optional[IterableDatasetDict] = None
+
     # no. cpu threads. Defaults to # cores - 2.
     # these are used to determine how many threads will process the streaming
     # dataset concurrently with model training
@@ -57,7 +66,7 @@ class BooksCorpusAndWiki:
         assert isinstance(self.datasets["train"], torch.utils.data.IterableDataset)
         assert isinstance(self.datasets["validation"], torch.utils.data.IterableDataset)
 
-    @property
+    @cached_property
     def training_args(self):
         """
         Dataset-specific **kwargs to init HuggingFace TrainingArguments
@@ -70,12 +79,21 @@ class BooksCorpusAndWiki:
             "data_seed": self.seed,
         }
 
-    @property
+    @cached_property
     def trainer_params(self):
         """
         Dataset-specific **kwargs to init HF Trainer
         Ref: https://huggingface.co/docs/transformers/main_classes/trainer#transformers.Trainer
         """
+        # we initialise different data collators based on causal or masked language modeling
+        if self.mlm_probability:
+            # in MLM we usually only have [CLS] and [SEP] tokens
+            collate_fn = DataCollatorForLanguageModeling(self.tokenizer, mlm=True, mlm_probability=self.mlm_probability)
+        else:
+            # our method of CLM pretraining we chunk the input (see group function) for pretraining with large amounts
+            # of data, hence no [PAD] token. This means the outputs of the dataloader are all `max_seq_len` long.
+            # So here we explicitly use the default data collator which doesn't include any padding, outputting samples as is.
+            collate_fn = DefaultDataCollator(return_tensors="pt")
         collate_fn = DataCollatorForLanguageModeling(
             self.tokenizer, mlm=(self.mlm_probability != 0), mlm_probability=self.mlm_probability
         )
@@ -84,6 +102,22 @@ class BooksCorpusAndWiki:
             "eval_dataset": self.datasets["validation"],
             "data_collator": collate_fn,
         }
+
+    @cached_property
+    def calibration_split(self):
+        """
+        Dataset-specific calibration samples for GPTQConfig, returned as list of strings (since that's the format they require)
+        The calibration split is equal to the validation split. Important to be a cached_property since it's rather
+        expensive to turn the whole eval dataset into a list every time the getter is called.
+        """
+        return list(self.datasets["validation"].take(self.quant_dataset_size))
+
+    @property
+    def quant_dataset_size(self):
+        # quantization calibration dataset size
+        # original GPTQ paper used 128 random 2048 token segments from the C4 dataset
+        # we match the same token count calculating using max_seq_len parameter
+        return int(128 * 2048 / self.max_seq_length)
 
     def dataloader(self, split: Literal["train", "validation"] = "train"):
         torch.manual_seed(self.seed)
@@ -117,9 +151,15 @@ class BooksCorpusAndWiki:
         # tokenize the text
         features = self.tokenizer(
             example_batch["text"],
+            # TODO: this line is trying to pad but there is no guarantee that we actually have a PAD token instantiated
+            # realistically we shouldn't even try to pad the input. The encode function is called before the group()
+            # which means that we are padding every sample up to max seq length, and then in the group function chunking them
+            # into max_seq_len long chunks, which will now include PAD tokens???
+            # max_length=self.max_seq_length,
+            # padding=False,
+            return_special_tokens_mask=True,
+            # return_tensors="pt",
             max_length=self.max_seq_length,
             padding="max_length",
-            return_special_tokens_mask=True,
-            return_tensors="pt",
         )
         return features

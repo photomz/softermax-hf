@@ -8,3 +8,6 @@ from .softerllama.modeling_softerllama import (
     SofterLlamaModel,
     SofterLlamaForCausalLM,
 )
+
+from .softerbert.configuration_softerbert import SofterBertConfig
+from .softerbert.modeling_softerbert import SofterBertPreTrainedModel, SofterBertModel, SofterBertForMaskedLM

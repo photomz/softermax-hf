@@ -52,8 +52,8 @@ class SofterLlamaAttention(nn.Module):
             )
 
         # MZ: softermax n_bias, clipped softmax n_clip parameters
-        self.n_bias = nn.Parameter(torch.tensor(config.n_bias), requires_grad=config.learn_softmax)
-        self.n_clip = nn.Parameter(torch.tensor(config.n_clip), requires_grad=config.learn_softmax)
+        self.n_bias = nn.Parameter(torch.tensor(config.n_bias, dtype=torch.float32), requires_grad=config.learn_softmax)
+        self.n_clip = nn.Parameter(torch.tensor(config.n_clip, dtype=torch.float32), requires_grad=config.learn_softmax)
 
         self.attention_dropout = config.attention_dropout
         self.hidden_size = config.hidden_size
@@ -195,7 +195,7 @@ class SofterLlamaAttention(nn.Module):
         # upcast attention to fp32
         # softermax overriding original attention softmax
         attn_weights = softermax(attn_weights, self.n_bias, dim=-1).type(dtype=torch.float32).to(query_states.dtype)
-        attn_weights = clip_logits(attn_weights, self.n_clip, dim=-1)
+        attn_weights = clip_logits(attn_weights, self.n_clip)
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
         attn_output = torch.matmul(attn_weights, value_states)
 
