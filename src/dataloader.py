@@ -148,13 +148,6 @@ class BooksCorpusAndWiki:
         # tokenize the text
         features = self.tokenizer(
             example_batch["text"],
-            # TODO: this line is trying to pad but there is no guarantee that we actually have a PAD token instantiated
-            # realistically we shouldn't even try to pad the input. The encode function is called before the group()
-            # which means that we are padding every sample up to max seq length, and then in the group function chunking them
-            # into max_seq_len long chunks, which will now include PAD tokens???
-            # max_length=self.max_seq_length,
-            # padding=False,
             return_special_tokens_mask=True,
-            # return_tensors="pt",
         )
         return features
