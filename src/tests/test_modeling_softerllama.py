@@ -94,14 +94,14 @@ def test_trainer_evaluate(sl_model, bookscorpusandwiki):
     # the evaluation loop is correct
     required_args = {"output_dir": "/tmp", "max_steps": int(1e5), "logging_dir": "/tmp/runs"}
     print("softertrainingargs")
-    bookscorpusandwiki.batch_size["validation"] = 1
+    bookscorpusandwiki.batch_size["validation"] = 12
     print(bookscorpusandwiki.tokenizer)
     trainingargs = SofterTrainingArguments(
         **bookscorpusandwiki.training_args,
         # quant_kwargs=default_quant_configs,
         # quant_dataset=bookscorpusandwiki.calibration_split,
         # quant_tokenizer=bookscorpusandwiki.tokenizer,
-        eval_accumulation_steps=1,
+        eval_accumulation_steps=3,
         **required_args,
     )
 
@@ -111,7 +111,6 @@ def test_trainer_evaluate(sl_model, bookscorpusandwiki):
         sl_model,
         trainingargs,
         compute_metrics=compute_softermetrics,
-        # preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         **bookscorpusandwiki.trainer_params,
     )
-    assert trainer.evaluate()
+    assert trainer.evaluate(eval_dataset=bookscorpusandwiki.datasets["validation"])
