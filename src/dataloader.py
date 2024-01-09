@@ -94,9 +94,6 @@ class BooksCorpusAndWiki:
             # of data, hence no [PAD] token. This means the outputs of the dataloader are all `max_seq_len` long.
             # So here we explicitly use the default data collator which doesn't include any padding, outputting samples as is.
             collate_fn = DefaultDataCollator(return_tensors="pt")
-        collate_fn = DataCollatorForLanguageModeling(
-            self.tokenizer, mlm=(self.mlm_probability != 0), mlm_probability=self.mlm_probability
-        )
         return {
             "train_dataset": self.datasets["train"],
             "eval_dataset": self.datasets["validation"],
@@ -159,7 +156,5 @@ class BooksCorpusAndWiki:
             # padding=False,
             return_special_tokens_mask=True,
             # return_tensors="pt",
-            max_length=self.max_seq_length,
-            padding="max_length",
         )
         return features
