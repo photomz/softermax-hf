@@ -60,6 +60,7 @@ training_args = SofterTrainingArguments(
     save_strategy="steps",
     save_steps=wandb.config.save_steps,
     per_device_train_batch_size=wandb.config.batch_size,
+    per_device_eval_batch_size=wandb.config.eval_batch_size
     gradient_accumulation_steps=wandb.config.grad_accum_steps,
     logging_steps=wandb.config.logging_steps,
     report_to="wandb",
