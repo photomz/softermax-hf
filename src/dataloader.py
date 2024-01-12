@@ -90,10 +90,13 @@ class BooksCorpusAndWiki:
             # in MLM we usually only have [CLS] and [SEP] tokens
             collate_fn = DataCollatorForLanguageModeling(self.tokenizer, mlm=True, mlm_probability=self.mlm_probability)
         else:
+            # DataCollatorForLanguageModeling(mlm=False) requires a pad_token (which doesn't exist) to be set, but
             # our method of CLM pretraining we chunk the input (see group function) for pretraining with large amounts
             # of data, hence no [PAD] token. This means the outputs of the dataloader are all `max_seq_len` long.
             # So here we explicitly use the default data collator which doesn't include any padding, outputting samples as is.
+            # The caveat here is that we have to manually create the 'labels' column, which we do at the end of .group()
             collate_fn = DefaultDataCollator(return_tensors="pt")
+
         return {
             "train_dataset": self.datasets["train"],
             "eval_dataset": self.datasets["validation"],
@@ -129,7 +132,10 @@ class BooksCorpusAndWiki:
         )
 
     def group(self, example_batch):
-        """Concatenate the dataset into chunks of max_seq_length. Don't waste tokens exceeding seqlen."""
+        """
+        Concatenate the dataset into chunks of max_seq_length. Don't waste tokens exceeding seqlen.
+        Ref: https://huggingface.co/learn/nlp-course/chapter7/3?fw=pt#preprocessing-the-data
+        """
         # Flatten batch
         concatenated_examples = {k: list(itertools.chain(*example_batch[k])) for k in example_batch.keys()}
         total_length = len(concatenated_examples[list(example_batch.keys())[0]])
@@ -142,9 +148,18 @@ class BooksCorpusAndWiki:
             k: [t[i : i + self.max_seq_length] for i in range(0, total_length, self.max_seq_length)]
             for k, t in concatenated_examples.items()
         }
+
+        # create new labels column
+        # remember the model will automatically right-shift them for us when calculating loss
+        result["labels"] = result["input_ids"].copy()
         return result
 
     def encode(self, example_batch):
+        """
+        Tokenizes all the text into tokens first, the chunking will be done after by .group() function
+        so we don't unnecessarily drop tokens by using huggingface's built-in chunking method.
+        Ref: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt#preparing-the-dataset
+        """
         # tokenize the text
         features = self.tokenizer(
             example_batch["text"],
