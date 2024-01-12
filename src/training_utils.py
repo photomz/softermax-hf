@@ -110,11 +110,6 @@ class SofterTrainer(Trainer):
 
         return orig_metrics
 
-    # TODO subclass trainer evaluation_loop. currently their behaviour is to collate all relevant metric tensors into one
-    # really large tensor on on GPU (or move to CPU with accumulation steps), this causes memory to blow up and kill the process
-    # we have to change the eval loop to make compute_metrics be called on the fly, at the time that the tensors would have been
-    # moved to the CPU, we just run the metrics then discard the tensors since our attention sum metrics don't require the whole
-    # dataset to be evaluated first.
     def evaluation_loop(
         self,
         dataloader: DataLoader,
@@ -250,18 +245,18 @@ class SofterTrainer(Trainer):
                     inputs_decode = nested_numpify(inputs_host)
                 if labels_host is not None:
                     labels = nested_numpify(labels_host)
-
+                # for metric computation, while huggingface uses EvalPrediction, i'm going to explicitly pass a dictionary
+                # instead, because default behaviour is to not provide the loss as input to compute_metrics, but we need
+                # the loss in order to calculate the perplexity
                 if args.include_inputs_for_metrics:
                     metrics = self.compute_metrics(
-                        EvalPrediction(predictions=logits, label_ids=labels, inputs=inputs_decode)
+                        {"loss": losses, "predictions": logits, "label_ids": labels, "inputs": inputs_decode}
                     )
                 else:
-                    metrics = self.compute_metrics(EvalPrediction(predictions=logits, label_ids=labels))
-
+                    metrics = self.compute_metrics({"loss": losses, "predictions": logits, "label_ids": labels})
                 all_metrics = (
                     metrics if all_metrics is None else nested_concat(all_metrics, metrics, padding_index=-100)
                 )
-
                 # Set back to None to begin a new accumulation
                 losses_host, preds_host, inputs_host, labels_host = None, None, None, None
 
@@ -280,10 +275,15 @@ class SofterTrainer(Trainer):
             inputs_decode = nested_numpify(inputs_host)
         if labels_host is not None:
             labels = nested_numpify(labels_host)
+        # for metric computation, while huggingface uses EvalPrediction, i'm going to explicitly pass a dictionary
+        # instead, because default behaviour is to not provide the loss as input to compute_metrics, but we need
+        # the loss in order to calculate the perplexity
         if args.include_inputs_for_metrics:
-            metrics = self.compute_metrics(EvalPrediction(predictions=logits, label_ids=labels, inputs=inputs_decode))
+            metrics = self.compute_metrics(
+                {"loss": losses, "predictions": logits, "label_ids": labels, "inputs": inputs_decode}
+            )
         else:
-            metrics = self.compute_metrics(EvalPrediction(predictions=logits, label_ids=labels))
+            metrics = self.compute_metrics({"loss": losses, "predictions": logits, "label_ids": labels})
         all_metrics = metrics if all_metrics is None else nested_concat(all_metrics, metrics, padding_index=-100)
 
         # To be JSON-serializable, we need to remove numpy types or zero-d tensors
@@ -297,16 +297,32 @@ class SofterTrainer(Trainer):
             if not key.startswith(f"{metric_key_prefix}_"):
                 all_metrics[f"{metric_key_prefix}_{key}"] = all_metrics.pop(key)
 
-        # we only care about metrics being returned, neither predictions nor label_ids are used in evaluate() anyway
+        # Usually EvalLoopOutput will return predictions and label_ids as the large concatenated tensor on CPU of all
+        # the model outputs. Of course, here we don't create this large tensor, so there is nothing to output.
+        # We only care about metrics being returned, neither predictions nor label_ids are used in .evaluate() anyway.
+        # The only time the large tensors are returned is in Trainer.predict() which we won't use (but if we do, note this behaviour).
         return EvalLoopOutput(predictions=None, label_ids=None, metrics=metrics, num_samples=observed_num_examples)
 
 
-def compute_softermetrics(eval_preds):
+def compute_softermetrics(eval_preds: dict):
     """
-    eval_preds is expected to be EvalPrediction object.
-    Ref: https://huggingface.co/docs/transformers/main_classes/output#transformers.modeling_outputs.CausalLMOutput
-    [0] is the output raw logits of shape (batch_size, seq_len, vocab_size)
-    [1] are the attention matrices. Tuple of size num_layers, each element in the tuple being (batch_size, num_heads, seq_len, seq_len)
+    eval_preds is expected to be dictionary object instead of the default EvalPredictions object because we overrode
+    the original behaviour to pass in 'loss' as a metric. keys that are present change based on the config.
+    ['loss'] is the loss.
+    ['predictions'][0] is the output raw logits of shape (batch_size, seq_len, vocab_size)
+    ['predictions'][1] are the attention matrices. Tuple of size num_layers, each element in the tuple being (batch_size, num_heads, seq_len, seq_len)
+    ['label_ids'] inputs but right shifted
+    ['inputs'] label_ids but not right shifted :)
+
+    this function will compute the softmax sum mean and variances.
     """
-    # TODO, figure out what metrics we want
-    return {}
+    # calculate perplexity
+    ppl = np.exp(eval_preds["loss"])
+    logits = eval_preds["predictions"][0]
+    attn_matrices = eval_preds["predictions"][1]
+    
+    #TODO actually write the function to compute softmax sum
+    
+    return {
+        "ppl": ppl,
+    }
