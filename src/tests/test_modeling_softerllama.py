@@ -1,6 +1,8 @@
 """
 PyTest unit testing. Run the unit tests from the root directory using
 `python -m pytest src/tests/test_modeling_softerllama.py`
+if you want to run a specific unit test like test_trainer_evaluate() with print outputs and stuff, run
+`python -m pytest src/tests/test_modeling_softerllama.py -k 'test_trainer_evaluate' -s --full-trace`
 """
 
 import pytest
@@ -10,8 +12,7 @@ from src.dataloader import BooksCorpusAndWiki
 from src.training_utils import (
     SofterTrainer,
     SofterTrainingArguments,
-    compute_softermetrics,
-    preprocess_logits_for_metrics,
+    wandb_metric_computer,
 )
 from src.quantization.quant import default_quant_configs
 from transformers import LlamaConfig, LlamaForCausalLM, LlamaTokenizerFast
@@ -44,7 +45,6 @@ def sl_model(softerllama_config) -> SofterLlamaForCausalLM:
     return SofterLlamaForCausalLM.from_pretrained("nickypro/tinyllama-15M", config=softerllama_config).eval()
 
 
-"""
 def test_softermax0_equal_softmax(tokenizer):
     og_model = LlamaForCausalLM.from_pretrained("nickypro/tinyllama-15M").eval()
 
@@ -85,7 +85,6 @@ def test_loading_and_saving(tmpdir, sl_model):
 
     loaded_model = SofterLlamaForCausalLM.from_pretrained(tmpdir.join("/tinyllama-15M"))
     assert loaded_model.config.n_bias == sl_model.config.n_bias
-"""
 
 
 def test_trainer_evaluate(sl_model, bookscorpusandwiki):
@@ -93,9 +92,7 @@ def test_trainer_evaluate(sl_model, bookscorpusandwiki):
     # the softertrainer evaluate function to verify
     # the evaluation loop is correct
     required_args = {"output_dir": "/tmp", "max_steps": int(1e5), "logging_dir": "/tmp/runs"}
-    print("softertrainingargs")
     bookscorpusandwiki.batch_size["validation"] = 12
-    print(bookscorpusandwiki.tokenizer)
     trainingargs = SofterTrainingArguments(
         **bookscorpusandwiki.training_args,
         # quant_kwargs=default_quant_configs,
@@ -106,11 +103,10 @@ def test_trainer_evaluate(sl_model, bookscorpusandwiki):
     )
 
     # Don't snapshot-test Trainer. It has hardware-specific configs, so it's not portable.
-    print(bookscorpusandwiki.trainer_params)
     trainer = SofterTrainer(
         sl_model,
         trainingargs,
-        compute_metrics=compute_softermetrics,
+        compute_metrics=wandb_metric_computer(),
         **bookscorpusandwiki.trainer_params,
     )
     assert trainer.evaluate(eval_dataset=bookscorpusandwiki.datasets["validation"])
