@@ -17,6 +17,8 @@ from transformers.trainer_utils import EvalLoopOutput, EvalPrediction, has_lengt
 from transformers.trainer_pt_utils import IterableDatasetShard, find_batch_size, nested_concat, nested_numpify
 from transformers.utils import is_torch_tpu_available
 
+import wandb
+
 # from .quantization.quant import quantize, default_quant_configs
 # from .quantization.quantizer import GPTQQuantizer
 
@@ -124,13 +126,15 @@ class SofterTrainer(Trainer):
         Subclassed and changed compute_metrics behaviour. Original Trainer would collate all relevant tensors
         onto CPU and then run the compute_metrics on very large tensors. This is infeasible for us because
         1. we require entire attention matrices for our metrics
-        2. compute_metrics won't even get called in vanilla Trainer if there are no labels supplied (which don't exist in decoder-only models)
+        2. compute_metrics won't even get called in vanilla Trainer if there are no labels supplied
         3. we're broke
         In this new subclass, compute_metrics is called every 'eval_accumulation_steps' to prevent the large validation dataset that we
         have from killing the process due to exceeding memory capacity, and this will work so long as every tensor can have their metrics
-        computed independently from each other.
+        computed independently from each other. compute_metrics is also expected to be a wrapper function like wandb_metric_computer that I
+        created below.
 
-        Note: There are quite a few changes to unnecessary functionality such as TPU support and
+        Note: There are quite a few changes to unnecessary functionality such as TPU support and nothing is guaranteed to work
+        (honestly I'm surprised anything I write runs)
         """
         args = self.args
 
@@ -280,14 +284,21 @@ class SofterTrainer(Trainer):
         # the loss in order to calculate the perplexity
         if args.include_inputs_for_metrics:
             metrics = self.compute_metrics(
-                {"loss": losses, "predictions": logits, "label_ids": labels, "inputs": inputs_decode}
+                {"loss": losses, "predictions": logits, "label_ids": labels, "inputs": inputs_decode},
             )
         else:
-            metrics = self.compute_metrics({"loss": losses, "predictions": logits, "label_ids": labels})
+            metrics = self.compute_metrics(
+                {"loss": losses, "predictions": logits, "label_ids": labels},
+            )
         all_metrics = metrics if all_metrics is None else nested_concat(all_metrics, metrics, padding_index=-100)
 
         # To be JSON-serializable, we need to remove numpy types or zero-d tensors
         all_metrics = denumpify_detensorize(all_metrics)
+
+        # going to concat extra non-tensor metrics like wandb tables to the metric dict
+        all_metrics.update(self.compute_metrics.get_persistent())
+        # then clear the persistent variables for a future eval loop
+        self.compute_metrics.clear_persistent()
 
         if hasattr(self, "jit_compilation_time"):
             all_metrics[f"{metric_key_prefix}_jit_compilation_time"] = self.jit_compilation_time
@@ -304,25 +315,65 @@ class SofterTrainer(Trainer):
         return EvalLoopOutput(predictions=None, label_ids=None, metrics=metrics, num_samples=observed_num_examples)
 
 
-def compute_softermetrics(eval_preds: dict):
+@dataclass
+class wandb_metric_computer:
     """
-    eval_preds is expected to be dictionary object instead of the default EvalPredictions object because we overrode
-    the original behaviour to pass in 'loss' as a metric. keys that are present change based on the config.
-    ['loss'] is the loss.
-    ['predictions'][0] is the output raw logits of shape (batch_size, seq_len, vocab_size)
-    ['predictions'][1] are the attention matrices. Tuple of size num_layers, each element in the tuple being (batch_size, num_heads, seq_len, seq_len)
-    ['label_ids'] inputs but right shifted
-    ['inputs'] label_ids but not right shifted :)
+    Mainly serves as a wrapper class around compute_metrics in order to store "global" variables that are maintained throughout
+    different compute_metrics calls.
+    This is the cleanest method I could think of in order to maintain a reference to the same wandb table instance (storing attention metrics)
+    in a single validation pass, but across multiple compute_metric calls.
+    """
 
-    this function will compute the softmax sum mean and variances.
-    """
-    # calculate perplexity
-    ppl = np.exp(eval_preds["loss"])
-    logits = eval_preds["predictions"][0]
-    attn_matrices = eval_preds["predictions"][1]
-    
-    #TODO actually write the function to compute softmax sum
-    
-    return {
-        "ppl": ppl,
-    }
+    attn_table: wandb.Table
+
+    @property
+    def attn_table(self):
+        # initialises a ✨ W&B Table as a read-only property (which is fine because we call .add_data() and not actually change the variable ref)
+        columns = ["label_ids", "layer", "head", "softmax_sum"]
+        return wandb.Table(columns=columns)
+
+    def compute_metrics(self, eval_preds: dict):
+        """
+        eval_preds is expected to be dictionary object instead of the default EvalPredictions object because we overrode
+        the original behaviour to pass in 'loss' as a metric. keys that are present change based on the config.
+        ['loss'] is the loss.
+        ['predictions'][0] is the output raw logits of shape (batch_size, seq_len, vocab_size)
+        ['predictions'][1] are the attention matrices. Tuple of size num_layers, each element in the tuple being (batch_size, num_heads, seq_len, seq_len)
+        ['label_ids'] are inputs but right shifted
+        ['inputs'] are label_ids but not right shifted :)
+
+        this function will compute the softmax sum mean and variances.
+        """
+        # calculate perplexity
+        ppl = np.exp(eval_preds["loss"])
+        logits = eval_preds["predictions"][0]
+        attn_matrices = eval_preds["predictions"][1]
+        label_ids = eval_preds["label_ids"]
+
+        for layer_num, layer_attn in enumerate(attn_matrices):
+            # should be of shape (batch_size, num_heads, seq_len, seq_len)
+            for batch_num, batch_instance in enumerate(layer_attn):
+                # iterates through the batch_size dim, now batch_instance should be (num_heads, seq_len, seq_len)
+                for head_num, head in enumerate(batch_instance):
+                    # iterates through the num_heads dim, head should be (seq_len, seq_len) and the row should softmax sum to between 0-1
+                    # note: wandb images follow PIL's cartesian pixel coordinate system, with (0,0) in the upper left corner
+                    # .numpy() otherwise torch.Tensor will be automatically normalized by wandb
+                    softmax_sum = wandb.Image(head.numpy())
+                    self.attn_table.add_data(label_ids[batch_num], layer_num, head_num, softmax_sum)
+
+        return {"ppl": ppl}
+
+    def get_persistent(self):
+        """
+        Returns the variables that are persistent across multiple compute_metrics iterations. Mainly the wandb attention table.
+        """
+        return {"attn_table": self.attn_table}
+
+    def clear_persistent(self):
+        """
+        Resets persistent variables to their defaults, should be called once eval loop and all compute_metrics iterations are over
+        """
+        self.attn_table = self.attn_table()
+
+    def __call__(self, **kwargs):
+        return self.compute_metrics(**kwargs)
