@@ -74,7 +74,6 @@ class SofterTrainer(Trainer):
         orig_output_attentions = self.model.config.output_attentions
         # ensure model will output attention matrix for compute_metrics
         self.model.config.output_attentions = True
-        print(self.model.config.output_attentions)
 
         # first run regular model eval
         orig_metrics = super().evaluate(eval_dataset, ignore_keys, metric_key_prefix="orig")
@@ -198,8 +197,9 @@ class SofterTrainer(Trainer):
         observed_num_examples = 0
 
         # Main evaluation loop
-        all_metrics = {}
+        all_metrics = None
         for step, inputs in enumerate(dataloader):
+            print(f"step {step}")
             # Update the observed num examples
             observed_batch_size = find_batch_size(inputs)
             if observed_batch_size is not None:
@@ -291,7 +291,6 @@ class SofterTrainer(Trainer):
                 {"loss": losses, "predictions": logits, "label_ids": labels},
             )
         all_metrics = metrics if all_metrics is None else nested_concat(all_metrics, metrics, padding_index=-100)
-
         # To be JSON-serializable, we need to remove numpy types or zero-d tensors
         all_metrics = denumpify_detensorize(all_metrics)
 
@@ -312,10 +311,9 @@ class SofterTrainer(Trainer):
         # the model outputs. Of course, here we don't create this large tensor, so there is nothing to output.
         # We only care about metrics being returned, neither predictions nor label_ids are used in .evaluate() anyway.
         # The only time the large tensors are returned is in Trainer.predict() which we won't use (but if we do, note this behaviour).
-        return EvalLoopOutput(predictions=None, label_ids=None, metrics=metrics, num_samples=observed_num_examples)
+        return EvalLoopOutput(predictions=None, label_ids=None, metrics=all_metrics, num_samples=observed_num_examples)
 
 
-@dataclass
 class wandb_metric_computer:
     """
     Mainly serves as a wrapper class around compute_metrics in order to store "global" variables that are maintained throughout
@@ -324,11 +322,13 @@ class wandb_metric_computer:
     in a single validation pass, but across multiple compute_metric calls.
     """
 
-    attn_table: wandb.Table
+    def __init__(self):
+        self.attn_table = self.init_attn_table()
 
-    @property
-    def attn_table(self):
-        # initialises a ✨ W&B Table as a read-only property (which is fine because we call .add_data() and not actually change the variable ref)
+    def init_attn_table(self):
+        """
+        Initialises a new ✨ W&B Table
+        """
         columns = ["label_ids", "layer", "head", "softmax_sum"]
         return wandb.Table(columns=columns)
 
@@ -357,10 +357,9 @@ class wandb_metric_computer:
                 for head_num, head in enumerate(batch_instance):
                     # iterates through the num_heads dim, head should be (seq_len, seq_len) and the row should softmax sum to between 0-1
                     # note: wandb images follow PIL's cartesian pixel coordinate system, with (0,0) in the upper left corner
-                    # .numpy() otherwise torch.Tensor will be automatically normalized by wandb
-                    softmax_sum = wandb.Image(head.numpy())
+                    softmax_sum = wandb.Image(head)
                     self.attn_table.add_data(label_ids[batch_num], layer_num, head_num, softmax_sum)
-
+        print("metrics", {"ppl": ppl})
         return {"ppl": ppl}
 
     def get_persistent(self):
@@ -373,7 +372,7 @@ class wandb_metric_computer:
         """
         Resets persistent variables to their defaults, should be called once eval loop and all compute_metrics iterations are over
         """
-        self.attn_table = self.attn_table()
+        self.attn_table = self.init_attn_table()
 
-    def __call__(self, **kwargs):
-        return self.compute_metrics(**kwargs)
+    def __call__(self, *args):
+        return self.compute_metrics(*args)
