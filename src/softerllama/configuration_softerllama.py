@@ -6,6 +6,8 @@ from transformers.models.llama import LlamaConfig
 
 
 class SofterLlamaConfig(LlamaConfig):
+    model_type = "softerllama"
+
     def __init__(self, n_bias: float = 0.0, n_clip: float = 0.0, learn_softmax: bool = False, **kwargs):
         super().__init__(**kwargs)
         self.n_bias = n_bias  # Softermax bias

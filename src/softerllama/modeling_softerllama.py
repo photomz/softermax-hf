@@ -250,7 +250,7 @@ class SofterLlamaModel(SofterLlamaPreTrainedModel):
     Main changes from original include removal of self._use_sdpa and self._use_flash_attention_2 as we do not support those implementations.
 
     Args:
-        config: LlamaConfig
+        config: SofterLlamaConfig
     """
 
     def __init__(self, config: SofterLlamaConfig):
@@ -398,7 +398,7 @@ class SofterLlamaModel(SofterLlamaPreTrainedModel):
         )
 
 
-class SofterLlamaForCausalLM(LlamaPreTrainedModel):
+class SofterLlamaForCausalLM(SofterLlamaPreTrainedModel):
     _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config):

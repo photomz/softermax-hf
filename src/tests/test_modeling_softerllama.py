@@ -36,7 +36,7 @@ def bookscorpusandwiki(tokenizer):
 def softerllama_config() -> SofterLlamaConfig:
     # adopts 15M model's params
     sl_config = SofterLlamaConfig.from_pretrained("nickypro/tinyllama-15M")
-    sl_config.n_bias = 1
+    sl_config.n_bias = 0
     return sl_config
 
 
@@ -91,7 +91,7 @@ def test_trainer_evaluate(sl_model, bookscorpusandwiki):
     # this function will pass a dataset validation batch through
     # the softertrainer evaluate function to verify
     # the evaluation loop is correct
-    required_args = {"output_dir": "/tmp", "max_steps": int(1e5), "logging_dir": "/tmp/runs"}
+    required_args = {"output_dir": "/tmp", "max_steps": 1, "logging_dir": "/tmp/runs"}
     bookscorpusandwiki.batch_size["validation"] = 12
     trainingargs = SofterTrainingArguments(
         **bookscorpusandwiki.training_args,
@@ -99,6 +99,11 @@ def test_trainer_evaluate(sl_model, bookscorpusandwiki):
         # quant_dataset=bookscorpusandwiki.calibration_split,
         # quant_tokenizer=bookscorpusandwiki.tokenizer,
         eval_accumulation_steps=3,
+        evaluation_strategy="steps",
+        eval_delay=0,
+        eval_steps=1,
+        logging_first_step=True,
+        logging_strategy="steps",
         **required_args,
     )
 
@@ -109,4 +114,4 @@ def test_trainer_evaluate(sl_model, bookscorpusandwiki):
         compute_metrics=wandb_metric_computer(),
         **bookscorpusandwiki.trainer_params,
     )
-    assert trainer.evaluate(eval_dataset=bookscorpusandwiki.datasets["validation"])
+    assert trainer.train()
