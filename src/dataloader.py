@@ -74,8 +74,6 @@ class BooksCorpusAndWiki:
         """
         return {
             "dataloader_num_workers": self.num_workers,
-            "per_device_train_batch_size": self.batch_size["train"],
-            "per_device_eval_batch_size": self.batch_size["validation"],
             "data_seed": self.seed,
         }
 
@@ -99,7 +97,7 @@ class BooksCorpusAndWiki:
 
         return {
             "train_dataset": self.datasets["train"],
-            "eval_dataset": self.datasets["validation"],
+            "eval_dataset": self.datasets["validation"].take(1200),
             "data_collator": collate_fn,
         }
 

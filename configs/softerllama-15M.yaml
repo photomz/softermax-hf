@@ -40,13 +40,21 @@
         description: number of training steps
         value: 500.0e+3
 
+    eval_batch_size:
+        description: eval batch size (per gpu device)
+        value: 32
+
     eval_steps:
-        description: intervals before model is evaluated and checkpoints are saved
+        description: intervals before model is evaluated
         value: 5.0e+3
 
     eval_accumulation_steps:
-        description:  Number of predictions steps to accumulate the output tensors for, before moving the results to the CPU.
-        value: 20
+        description:  Number of predictions steps to accumulate the output tensors for, before running compute metrics & moving the results to the CPU.
+        value: 10
+
+    save_steps:
+        description: intervals before model checkpoints are saved
+        value: 5.0e+3
 
     logging_steps:
         description: intervals before wandb logging
