@@ -322,15 +322,21 @@ class wandb_metric_computer:
     in a single validation pass, but across multiple compute_metric calls.
     """
 
-    def __init__(self):
-        self.attn_table = self.init_attn_table()
+    # stores attention softmax sum heatmaps for ONLY THE FIRST batch of eval samples
+    # since storing everything would require millions of wandb table rows.
+    attn_table: wandb.Table
+    attn_table_len: int
 
-    def init_attn_table(self):
+    def __init__(self):
+        self.init_attn_table()
+
+    def init_attn_table(self) -> None:
         """
         Initialises a new ✨ W&B Table
         """
         columns = ["label_ids", "layer", "head", "softmax_sum"]
-        return wandb.Table(columns=columns)
+        self.attn_table = wandb.Table(columns=columns)
+        self.attn_table_len = 0
 
     def compute_metrics(self, eval_preds: dict):
         """
@@ -350,16 +356,18 @@ class wandb_metric_computer:
         attn_matrices = eval_preds["predictions"][1]
         label_ids = eval_preds["label_ids"]
 
-        for layer_num, layer_attn in enumerate(attn_matrices):
-            # should be of shape (batch_size, num_heads, seq_len, seq_len)
-            for batch_num, batch_instance in enumerate(layer_attn):
-                # iterates through the batch_size dim, now batch_instance should be (num_heads, seq_len, seq_len)
-                for head_num, head in enumerate(batch_instance):
-                    # iterates through the num_heads dim, head should be (seq_len, seq_len) and the row should softmax sum to between 0-1
-                    # note: wandb images follow PIL's cartesian pixel coordinate system, with (0,0) in the upper left corner
-                    softmax_sum = wandb.Image(head)
-                    self.attn_table.add_data(label_ids[batch_num], layer_num, head_num, softmax_sum)
-        print("metrics", {"ppl": ppl})
+        # check if table is empty (i.e. first compute_metrics call and first eval batch), only then do we compute softmax sum heatmaps
+        if self.attn_table_len == 0:
+            for layer_num, layer_attn in enumerate(attn_matrices):
+                # should be of shape (batch_size, num_heads, seq_len, seq_len)
+                for batch_num, batch_instance in enumerate(layer_attn):
+                    # iterates through the batch_size dim, now batch_instance should be (num_heads, seq_len, seq_len)
+                    for head_num, head in enumerate(batch_instance):
+                        # iterates through the num_heads dim, head should be (seq_len, seq_len) and the row should softmax sum to between 0-1
+                        # note: wandb images follow PIL's cartesian pixel coordinate system, with (0,0) in the upper left corner
+                        softmax_sum = wandb.Image(head)
+                        self.attn_table.add_data(label_ids[batch_num], layer_num, head_num, softmax_sum)
+                        self.attn_table_len += 1
         return {"ppl": ppl}
 
     def get_persistent(self):
@@ -372,7 +380,7 @@ class wandb_metric_computer:
         """
         Resets persistent variables to their defaults, should be called once eval loop and all compute_metrics iterations are over
         """
-        self.attn_table = self.init_attn_table()
+        self.init_attn_table()
 
     def __call__(self, *args):
         return self.compute_metrics(*args)
