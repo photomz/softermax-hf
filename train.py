@@ -6,6 +6,7 @@ by running `python train.py --configs configs/{config_file_here}.yaml`
 import argparse
 import wandb
 from torch.optim.lr_scheduler import OneCycleLR
+from torch.optim import AdamW
 
 from src import SofterLlamaConfig, SofterLlamaForCausalLM
 from src import SofterBertConfig, SofterBertForMaskedLM
@@ -13,7 +14,6 @@ from src.dataloader import BooksCorpusAndWiki
 from src.training_utils import SofterTrainer, SofterTrainingArguments, wandb_metric_computer
 
 from transformers import LlamaTokenizerFast, BertTokenizer
-from transformers.optimization import AdamW
 
 # maps .yaml config file model names to model and tokenizer classes
 model_mapping = {"softerllama": SofterLlamaForCausalLM, "softerbert": SofterBertForMaskedLM}
