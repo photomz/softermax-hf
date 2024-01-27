@@ -1,0 +1,86 @@
+---
+    ### overall configuration ###
+    run_name:
+        description: wandb run name
+        value: 'softerllama-15M'
+
+    output_dir:
+        description: output directory for saved models
+        value: './models/softerllama-15M/'
+
+    model_name:
+        description: name of the model class. One of [softerbert, softerllama]
+        value: 'softerllama'
+
+    seed:
+        description: seed for the run
+        value: 1337
+
+    # borrowing existing tinyllama configs for 15M model from huggingface hub
+    model_config_src:
+        description: name on huggingface hub/local path to config and tokenizer files
+        value: 'nickypro/tinyllama-15M'
+
+    ### softermax parameters ###
+    n_bias :
+        description:
+        value: 1
+
+    ### training configs ###
+    batch_size:
+        description: training batch size (per gpu device)
+        value: 32
+
+    # effective batch size is batch_size * grad_accum_steps
+    grad_accum_steps:
+        descriptions: number of steps to accumulate gradient for before performing backward pass
+        value: 4
+
+    total_steps:
+        description: number of training steps
+        value: 500.0e+3
+
+    eval_steps:
+        description: intervals before model is evaluated and checkpoints are saved
+        value: 5.0e+3
+
+    eval_accumulation_steps:
+        description:  Number of predictions steps to accumulate the output tensors for, before moving the results to the CPU.
+        value: 20
+
+    logging_steps:
+        description: intervals before wandb logging
+        value: 50
+
+    mlm_probability:
+        description: probability of mlm masking being applied to a train sequence token (if applicable)
+        value: 0
+
+    ### optimization parameters ###
+    learning_rate:
+        description: The maximum learning rate for 1cycle scheduler
+        value: 1.2e-4
+
+    weight_decay:
+        description: The weight decay to apply (if not zero) to all layers except all bias and LayerNorm weights in AdamW optimizer.
+        value: 0.01
+
+    adam_beta1:
+        description: The beta1 hyperparameter for the AdamW optimizer
+        value: 0.9
+
+    adam_beta2:
+        description: The beta2 hyperparameter for the AdamW optimizer
+        value: 0.999
+
+    adam_epsilon:
+        description: The epsilon hyperparameter for the AdamW optimizer
+        value: 1.0e-6
+
+    hidden_dropout:
+        description: Dropout for hidden layers
+        value: 0.1
+
+    attention_dropout:
+        description: Dropout for attention
+        value: 0.1
