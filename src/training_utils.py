@@ -7,12 +7,14 @@ from typing import Optional, Union, List, Dict
 from torch.utils.data import Dataset, DataLoader
 import torch
 import numpy as np
+import pandas as pd
 
 from dataclasses import dataclass, field
 
-from transformers import Trainer, TrainingArguments, PreTrainedTokenizerBase, GPTQConfig
+from transformers import Trainer, TrainingArguments, TrainerState, TrainerControl, PreTrainedTokenizerBase, GPTQConfig
 from transformers.utils import logging
 from transformers.integrations.deepspeed import deepspeed_init, deepspeed_load_checkpoint, is_deepspeed_available
+from transformers.integrations import WandbCallback
 from transformers.trainer_utils import EvalLoopOutput, EvalPrediction, has_length, denumpify_detensorize
 from transformers.trainer_pt_utils import IterableDatasetShard, find_batch_size, nested_concat, nested_numpify
 from transformers.utils import is_torch_tpu_available
@@ -70,13 +72,8 @@ class SofterTrainer(Trainer):
             A dictionary containing the evaluation loss and the potential metrics computed from the predictions. The
             dictionary also contains the epoch number which comes from the training state.
         """
-        # store original output_attentions boolean value
-        orig_output_attentions = self.model.config.output_attentions
-        # ensure model will output attention matrix for compute_metrics
-        self.model.config.output_attentions = True
-
         # first run regular model eval
-        orig_metrics = super().evaluate(eval_dataset, ignore_keys, metric_key_prefix="orig")
+        orig_metrics = super().evaluate(eval_dataset, ignore_keys, metric_key_prefix="eval_orig")
 
         """
         Quant code not working. Prioritise getting train loop up and running first.
@@ -102,12 +99,10 @@ class SofterTrainer(Trainer):
         # return self.model ref to regular model and move to gpu
         self.model = orig_model
         self._move_model_to_device(orig_model, self.args.device)
-        """
-        # reset output_attentions to its original value
-        self.model.config.output_attentions = orig_output_attentions
 
         # combine both metric dictionaries into one
-        # orig_metrics.update(quant_metrics)
+        orig_metrics.update(quant_metrics)
+        """
 
         return orig_metrics
 
@@ -124,8 +119,8 @@ class SofterTrainer(Trainer):
 
         Subclassed and changed compute_metrics behaviour. Original Trainer would collate all relevant tensors
         onto CPU and then run the compute_metrics on very large tensors. This is infeasible for us because
-        1. we require entire attention matrices for our metrics
-        2. compute_metrics won't even get called in vanilla Trainer if there are no labels supplied
+        1. compute_metrics won't even get called in vanilla Trainer if there are no labels supplied
+        2. we don't have the GPU memory to hold everything in
         3. we're broke
         In this new subclass, compute_metrics is called every 'eval_accumulation_steps' to prevent the large validation dataset that we
         have from killing the process due to exceeding memory capacity, and this will work so long as every tensor can have their metrics
@@ -199,7 +194,6 @@ class SofterTrainer(Trainer):
         # Main evaluation loop
         all_metrics = None
         for step, inputs in enumerate(dataloader):
-            print(f"step {step}")
             # Update the observed num examples
             observed_batch_size = find_batch_size(inputs)
             if observed_batch_size is not None:
@@ -294,11 +288,6 @@ class SofterTrainer(Trainer):
         # To be JSON-serializable, we need to remove numpy types or zero-d tensors
         all_metrics = denumpify_detensorize(all_metrics)
 
-        # going to concat extra non-tensor metrics like wandb tables to the metric dict
-        all_metrics.update(self.compute_metrics.get_persistent())
-        # then clear the persistent variables for a future eval loop
-        self.compute_metrics.clear_persistent()
-
         if hasattr(self, "jit_compilation_time"):
             all_metrics[f"{metric_key_prefix}_jit_compilation_time"] = self.jit_compilation_time
 
@@ -314,73 +303,98 @@ class SofterTrainer(Trainer):
         return EvalLoopOutput(predictions=None, label_ids=None, metrics=all_metrics, num_samples=observed_num_examples)
 
 
-class wandb_metric_computer:
+def compute_softermetrics(eval_preds: dict):
     """
-    Mainly serves as a wrapper class around compute_metrics in order to store "global" variables that are maintained throughout
-    different compute_metrics calls.
-    This is the cleanest method I could think of in order to maintain a reference to the same wandb table instance (storing attention metrics)
-    in a single validation pass, but across multiple compute_metric calls.
+    eval_preds is expected to be dictionary object instead of the default EvalPredictions object because we overrode
+    the original behaviour to pass in 'loss' as a metric. keys that are present change based on the config.
+    ['loss'] is the loss.
+    ['predictions'] is the output raw logits of shape (batch_size, seq_len, vocab_size)
+    ['label_ids'] are inputs but right shifted
+    ['inputs'] (if provided) are label_ids but not right shifted :)
+    """
+    logits = eval_preds["predictions"]
+    label_ids = eval_preds["label_ids"]
+
+    ppl = np.exp(eval_preds["loss"]).tolist()
+    return {"ppl": ppl}
+
+
+class WandbComputeMetricCallback(WandbCallback):
+    """
+    Have to manually log wandb tables using a wandbcallback, trying to do it through the compute_metrics function (original approach)
+    throws an error because trainer fails to serialize wandb tables that are stored in state.log_history after being output by compute_metrics.
+
+    The dataloader will extract the first batch from the validation dataset. This same first batch will always be used to evaluate softmax metrics
+    every evaluation loop. Because the evaluation compute_metrics is completely disjoint from the wandb callback, we're going to have to use a
+    couple dirty hacks and minor inefficiencies to get this to work properly.
     """
 
-    # stores attention softmax sum heatmaps for ONLY THE FIRST batch of eval samples
-    # since storing everything would require millions of wandb table rows.
-    attn_table: wandb.Table
-    attn_table_len: int
+    def __init__(self, trainer: Trainer, tokenizer: PreTrainedTokenizerBase, val_dataloader):
+        """Initializes the WandbPredictionProgressCallback instance.
 
-    def __init__(self):
-        self.init_attn_table()
+        Args:
+            trainer: The Hugging Face Trainer instance.
+            tokenizer: The tokenizer associated with the model.
+            val_dataloader (Dataloader): The validation dataloader.
+        """
+        super().__init__()
+        self.trainer = trainer
+        self.tokenizer = tokenizer
+        self.sample_dataset = next(iter(val_dataloader))
+        # special_tokens_mask causes prediction_step to throw an error because the model forward pass doesn't recognise it
+        self.sample_dataset.pop("special_tokens_mask", None)
 
-    def init_attn_table(self) -> None:
-        """
-        Initialises a new ✨ W&B Table
-        """
-        columns = ["label_ids", "layer", "head", "softmax_sum"]
-        self.attn_table = wandb.Table(columns=columns)
-        self.attn_table_len = 0
+    def decode_predictions(self, logits, labels):
+        labels = self.tokenizer.batch_decode(labels)
+        logits = logits.argmax(axis=-1)
+        prediction_text = self.tokenizer.batch_decode(logits)
+        return {"labels": labels, "predictions": prediction_text}
 
-    def compute_metrics(self, eval_preds: dict):
-        """
-        eval_preds is expected to be dictionary object instead of the default EvalPredictions object because we overrode
-        the original behaviour to pass in 'loss' as a metric. keys that are present change based on the config.
-        ['loss'] is the loss.
-        ['predictions'][0] is the output raw logits of shape (batch_size, seq_len, vocab_size)
-        ['predictions'][1] are the attention matrices. Tuple of size num_layers, each element in the tuple being (batch_size, num_heads, seq_len, seq_len)
-        ['label_ids'] are inputs but right shifted
-        ['inputs'] are label_ids but not right shifted :)
+    def on_evaluate(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
+        super().on_evaluate(args, state, control, **kwargs)
 
-        this function will compute the softmax sum mean and variances.
-        """
-        # calculate perplexity
-        ppl = np.exp(eval_preds["loss"])
-        logits = eval_preds["predictions"][0]
-        attn_matrices = eval_preds["predictions"][1]
-        label_ids = eval_preds["label_ids"]
+        # store original output_attentions boolean value
+        orig_output_attentions = self.trainer.model.config.output_attentions
+        # ensure model will output attention matrix for compute_metrics
+        self.trainer.model.config.output_attentions = True
 
-        # check if table is empty (i.e. first compute_metrics call and first eval batch), only then do we compute softmax sum heatmaps
-        if self.attn_table_len == 0:
-            for layer_num, layer_attn in enumerate(attn_matrices):
-                # should be of shape (batch_size, num_heads, seq_len, seq_len)
-                for batch_num, batch_instance in enumerate(layer_attn):
-                    # iterates through the batch_size dim, now batch_instance should be (num_heads, seq_len, seq_len)
-                    for head_num, head in enumerate(batch_instance):
-                        # iterates through the num_heads dim, head should be (seq_len, seq_len) and the row should softmax sum to between 0-1
-                        # note: wandb images follow PIL's cartesian pixel coordinate system, with (0,0) in the upper left corner
-                        softmax_sum = wandb.Image(head)
-                        self.attn_table.add_data(label_ids[batch_num], layer_num, head_num, softmax_sum)
-                        self.attn_table_len += 1
-        return {"ppl": ppl}
+        # generate predictions
+        # predictions[0] is the output raw logits of shape (batch_size, seq_len, vocab_size)
+        # predictions[1] are the attention matrices. Tuple of size num_layers, each element in the tuple being (batch_size, num_heads, seq_len, seq_len)
+        loss, predictions, labels = self.trainer.prediction_step(
+            self.trainer.model, self.sample_dataset, prediction_loss_only=False, ignore_keys=None
+        )
+        logits, attn_matrices = predictions
 
-    def get_persistent(self):
-        """
-        Returns the variables that are persistent across multiple compute_metrics iterations. Mainly the wandb attention table.
-        """
-        return {"attn_table": self.attn_table}
+        # reset output_attentions to its original value
+        self.trainer.model.config.output_attentions = orig_output_attentions
 
-    def clear_persistent(self):
-        """
-        Resets persistent variables to their defaults, should be called once eval loop and all compute_metrics iterations are over
-        """
-        self.init_attn_table()
+        # decode predictions and labels
+        decoded_preds = self.decode_predictions(logits, labels)
+        # add predictions to a wandb.Table
+        columns = ["steps", "label", "prediction", "layer", "head", "softmax_sum"]
+        predictions_table = wandb.Table(columns=columns)
 
-    def __call__(self, *args):
-        return self.compute_metrics(*args)
+        for layer_num, layer_attn in enumerate(attn_matrices):
+            # should be of shape (batch_size, num_heads, seq_len, seq_len)
+            for batch_num, batch_instance in enumerate(layer_attn):
+                # iterates through the batch_size dim, now batch_instance should be (num_heads, seq_len, seq_len)
+                # iterates through the num_heads dim, head should be (seq_len, seq_len) and the row should softmax sum to between 0-1
+                for head_num, head in enumerate(batch_instance):
+                    # note: wandb images follow PIL's cartesian pixel coordinate system, with (0,0) in the upper left corner
+                    softmax_sum = wandb.Image(head)
+                    predictions_table.add_data(
+                        state.global_step,
+                        decoded_preds["labels"][batch_num],
+                        decoded_preds["predictions"][batch_num],
+                        layer_num,
+                        head_num,
+                        softmax_sum,
+                    )
+        # log the table to wandb
+        self._wandb.log({"sample_predictions": predictions_table})
+
+        # metrics computed by the last evaluation phase
+        # TODO: see what ppl looks like. figure out a way to log the avg, max, min, var of the final ppl list in compute_metrics
+        metrics = kwargs["metrics"]
+        print(f"metrics\n{metrics}")
