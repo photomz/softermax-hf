@@ -38,7 +38,7 @@
 
     total_steps:
         description: number of training steps
-        value: 1000.0e+3
+        value: 100.0e+3
 
     eval_batch_size:
         description: eval batch size (per gpu device)
@@ -46,7 +46,7 @@
 
     eval_steps:
         description: intervals before model is evaluated
-        value: 100.0e+3
+        value: 20.0e+3
 
     eval_accumulation_steps:
         description:  Number of predictions steps to accumulate the output tensors for, before running compute metrics & moving the results to the CPU.
@@ -54,7 +54,7 @@
 
     save_steps:
         description: intervals before model checkpoints are saved
-        value: 100.0e+3
+        value: 20.0e+3
 
     logging_steps:
         description: intervals before wandb logging
@@ -67,19 +67,19 @@
     ### optimization parameters ###
     learning_rate:
         description: The inital peak learning rate for cosine annealing scheduler
-        value: 5.0e-5
+        value: 1.5e-4
 
     warmup_steps:
         description: The number of steps for warmup phase
-        value: 100.0e+3
+        value: 10.0e+3
 
     num_iter_per_restart:
         description: The number of iterations per hard restart
-        value: 200.0e+3
+        value: 30.0e+3
 
     peak_decay:
         description: This factor is multiplied by previous peak lr to determine current restarted peak lr
-        value: 0.8
+        value: 0.5
 
     weight_decay:
         description: The weight decay to apply (if not zero) to all layers except all bias and LayerNorm weights in AdamW optimizer.
