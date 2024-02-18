@@ -61,6 +61,7 @@ bookscorpusandwiki.setup()
 # decayed cosine annealing with hard restarts scheduler setup
 optimizer = AdamW(
     model.parameters(),
+    lr=float(wandb.config.learning_rate),
     betas=(wandb.config.adam_beta1, wandb.config.adam_beta2),
     eps=wandb.config.adam_epsilon,
     weight_decay=wandb.config.weight_decay,
@@ -69,7 +70,7 @@ scheduler = WarmupDecayedCosineAnnealingWarmRestarts(
     optimizer,
     warmup_iters=int(wandb.config.warmup_steps),
     T_0=int(wandb.config.num_iter_per_restart),
-    decay=int(wandb.config.peak_decay),
+    decay=float(wandb.config.peak_decay),
 )
 
 # trainer setup
