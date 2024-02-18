@@ -302,6 +302,11 @@ class SofterTrainer(Trainer):
         # The only time the large tensors are returned is in Trainer.predict() which we won't use (but if we do, note this behaviour).
         return EvalLoopOutput(predictions=None, label_ids=None, metrics=all_metrics, num_samples=observed_num_examples)
 
+    def log(self, logs: Dict[str, float]) -> None:
+        # QoL change to log the learning rate as well, since default trainer does not
+        logs["learning_rate"] = self._get_learning_rate()
+        super().log(logs)
+
 
 def compute_softermetrics(eval_preds: dict):
     """
@@ -391,10 +396,25 @@ class WandbComputeMetricCallback(WandbCallback):
                         head_num,
                         softmax_sum,
                     )
-        # log the table to wandb
-        self._wandb.log({"sample_predictions": predictions_table})
 
-        # metrics computed by the last evaluation phase
-        # TODO: see what ppl looks like. figure out a way to log the avg, max, min, var of the final ppl list in compute_metrics
+        # the following calculates metrics for ppl. mainly this is a workaround to store the histogram values, wandb isn't
+        # properly tracking that the ppl list is not a media object, so the default list we log is not being accepted as a valid
+        # variable to display. So here we manually create the histogram and associated metrics we want for it.
+
+        # get metrics computed by the last evaluation phase
         metrics = kwargs["metrics"]
-        print(f"metrics\n{metrics}")
+        # format of the ppl keys will be "eval_{orig/quant}_ppl"
+        additional_ppl_metrics = {}
+        for key, value in metrics.items():
+            # the trainer logging will replace the first "_" with a "/" when logging to wandb and
+            # create a new section but here we have to do it manually
+            prefix = key.replace("_", "/", 1)
+            if key.endswith("_ppl"):
+                additional_ppl_metrics[f"{prefix}_hist"] = wandb.Histogram(value)
+                additional_ppl_metrics[f"{prefix}_mean"] = np.mean(value).item()
+                additional_ppl_metrics[f"{prefix}_var"] = np.var(value).item()
+                additional_ppl_metrics[f"{prefix}_min"] = np.min(value).item()
+                additional_ppl_metrics[f"{prefix}_max"] = np.max(value).item()
+
+        # log stuff to wandb
+        self._wandb.log({"sample_predictions": predictions_table, **additional_ppl_metrics})
