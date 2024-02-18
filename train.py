@@ -1,19 +1,24 @@
 """
 Train script for any models. Set the configs using a wandb configuration .yaml file
-by running `python train.py --configs configs/{config_file_here}.yaml`
+by running `python train.py --c configs/{config_file_here}.yaml`
 """
 
+import os
 import argparse
 import wandb
-from torch.optim.lr_scheduler import OneCycleLR
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.optim import AdamW
 
 from src import SofterLlamaConfig, SofterLlamaForCausalLM
 from src import SofterBertConfig, SofterBertForMaskedLM
+from src.scheduler import WarmupDecayedCosineAnnealingWarmRestarts
 from src.dataloader import BooksCorpusAndWiki
-from src.training_utils import SofterTrainer, SofterTrainingArguments, wandb_metric_computer
-
+from src.training_utils import SofterTrainer, SofterTrainingArguments, WandbComputeMetricCallback, compute_softermetrics
 from transformers import LlamaTokenizerFast, BertTokenizer
+
+# sets env variables for wandb, see: https://docs.wandb.ai/guides/integrations/huggingface#additional-wb-settings
+os.environ["WANDB_LOG_MODEL"] = "checkpoint"
+os.environ["WANDB_WATCH"] = "all"
 
 # maps .yaml config file model names to model and tokenizer classes
 model_mapping = {"softerllama": SofterLlamaForCausalLM, "softerbert": SofterBertForMaskedLM}
@@ -32,7 +37,7 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-wandb.init(project="training-runs", entity="softermax", config=args.config)
+wandb.init(project="training-run", entity="softermax", config=args.config)
 wandb.run.name = wandb.config.run_name
 
 # model configs setup
@@ -53,15 +58,18 @@ bookscorpusandwiki = BooksCorpusAndWiki(
 )
 bookscorpusandwiki.setup()
 
-# onecycle learning rate scheduler setup
+# decayed cosine annealing with hard restarts scheduler setup
 optimizer = AdamW(
     model.parameters(),
     betas=(wandb.config.adam_beta1, wandb.config.adam_beta2),
     eps=wandb.config.adam_epsilon,
     weight_decay=wandb.config.weight_decay,
 )
-scheduler = OneCycleLR(
-    optimizer, max_lr=wandb.config.learning_rate, total_steps=int(wandb.config.total_steps), last_epoch=-1
+scheduler = WarmupDecayedCosineAnnealingWarmRestarts(
+    optimizer,
+    warmup_iters=int(wandb.config.warmup_steps),
+    T_0=int(wandb.config.num_iter_per_restart),
+    decay=int(wandb.config.peak_decay),
 )
 
 # trainer setup
@@ -86,9 +94,18 @@ trainer = SofterTrainer(
     model,
     training_args,
     optimizers=(optimizer, scheduler),
-    compute_metrics=wandb_metric_computer(),
+    compute_metrics=compute_softermetrics,
     **bookscorpusandwiki.trainer_params,
 )
+
+# Instantiate the WandbComputeMetricProgressCallback
+wandb_compute_metrics_callback = WandbComputeMetricCallback(
+    trainer=trainer,
+    tokenizer=tokenizer,
+    val_dataloader=bookscorpusandwiki.dataloader("validation"),
+)
+# Add the callback to the trainer
+trainer.add_callback(wandb_compute_metrics_callback)
 
 # run the training
 trainer.train()
