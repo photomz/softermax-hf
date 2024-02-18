@@ -20,7 +20,7 @@ class BooksCorpusAndWiki:
     tokenizer: PreTrainedTokenizerBase
 
     # stream shuffled dataset by batches of buffer_size
-    buffer_size: int = 10000
+    buffer_size: int = 30000
     max_seq_length: int = 128
     batch_size: Dict[str, int] = field(default_factory=lambda: {"train": 32, "validation": 32})
 
@@ -97,7 +97,7 @@ class BooksCorpusAndWiki:
 
         return {
             "train_dataset": self.datasets["train"],
-            "eval_dataset": self.datasets["validation"].take(1200),
+            "eval_dataset": self.datasets["validation"],
             "data_collator": collate_fn,
         }
 
@@ -119,14 +119,17 @@ class BooksCorpusAndWiki:
 
     def dataloader(self, split: Literal["train", "validation"] = "train"):
         torch.manual_seed(self.seed)
-
+        # we initialise different data collators based on causal or masked language modeling
+        if self.mlm_probability:
+            # in MLM we usually only have [CLS] and [SEP] tokens
+            collate_fn = DataCollatorForLanguageModeling(self.tokenizer, mlm=True, mlm_probability=self.mlm_probability)
+        else:
+            collate_fn = DefaultDataCollator(return_tensors="pt")
         return DataLoader(
             self.datasets[split],
             batch_size=self.batch_size[split],
             num_workers=self.num_workers,
-            collate_fn=DataCollatorForLanguageModeling(
-                self.tokenizer, mlm=(self.mlm_probability != 0), mlm_probability=self.mlm_probability
-            ),
+            collate_fn=collate_fn,
         )
 
     def group(self, example_batch):
