@@ -97,7 +97,9 @@ class BooksCorpusAndWiki:
 
         return {
             "train_dataset": self.datasets["train"],
-            "eval_dataset": self.datasets["validation"],
+            # TODO make this a param? validation dataset is far too large to the point that wandb complains that the
+            # metrics we are sending exceed their max memory size XD
+            "eval_dataset": self.datasets["validation"].take(25_000),
             "data_collator": collate_fn,
         }
 
