@@ -75,6 +75,31 @@ def WarmupDecayedCosineAnnealingWarmRestarts(optimizer, warmup_iters, T_0=500, d
     return scheduler
 
 
+def get_param_groups(named_parameters, non_decay_names=["norm", "bias", "embed_tokens.weight"]) -> list[dict]:
+    """
+    Returns optimizer parameter groups with weight decay disabled for certain params.
+    Weight decay is disabled for:
+        - layer norm
+        - bias terms
+        - embedding weights
+
+    Returns:
+        List[Dict]: list of param groups to be used by the optimizer
+    """
+
+    decay_params = []
+    non_decay_params = []
+
+    for name, p in named_parameters:
+        if p.requires_grad:
+            if any(i in name for i in non_decay_names):
+                non_decay_params.append(p)
+            else:
+                decay_params.append(p)
+
+    return [{"params": decay_params}, {"params": non_decay_params, "weight_decay": 0.0}]
+
+
 if __name__ == "__main__":
 
     import matplotlib

@@ -6,12 +6,13 @@ by running `python train.py --c configs/{config_file_here}.yaml`
 import os
 import argparse
 import wandb
+from datetime import date
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.optim import AdamW
 
 from src import SofterLlamaConfig, SofterLlamaForCausalLM
 from src import SofterBertConfig, SofterBertForMaskedLM
-from src.scheduler import WarmupDecayedCosineAnnealingWarmRestarts
+from src.scheduler import WarmupDecayedCosineAnnealingWarmRestarts, get_param_groups
 from src.dataloader import BooksCorpusAndWiki
 from src.training_utils import SofterTrainer, SofterTrainingArguments, WandbComputeMetricCallback, compute_softermetrics
 from transformers import LlamaTokenizerFast, BertTokenizer
@@ -38,11 +39,11 @@ parser.add_argument(
 args = parser.parse_args()
 
 wandb.init(project="training-run", entity="softermax", config=args.config)
-wandb.run.name = wandb.config.run_name
+wandb.run.name = f"{wandb.config.run_name}-{date.today()}"
 
 # model configs setup
 config = config_mapping[wandb.config.model_name].from_pretrained(wandb.config.model_config_src)
-config.n_bias = 1
+config.n_bias = wandb.config.n_bias
 
 # tokenizer setup
 tokenizer = tokenizer_mapping[wandb.config.model_name].from_pretrained(wandb.config.model_config_src)
@@ -60,7 +61,7 @@ bookscorpusandwiki.setup()
 
 # decayed cosine annealing with hard restarts scheduler setup
 optimizer = AdamW(
-    model.parameters(),
+    get_param_groups(model.named_parameters()),
     lr=float(wandb.config.learning_rate),
     betas=(wandb.config.adam_beta1, wandb.config.adam_beta2),
     eps=wandb.config.adam_epsilon,
@@ -101,12 +102,12 @@ trainer = SofterTrainer(
 
 # Instantiate the WandbComputeMetricProgressCallback
 wandb_compute_metrics_callback = WandbComputeMetricCallback(
+    config_filepath=args.config
     trainer=trainer,
     tokenizer=tokenizer,
     val_dataloader=bookscorpusandwiki.dataloader("validation"),
 )
 # Add the callback to the trainer
 trainer.add_callback(wandb_compute_metrics_callback)
-
 # run the training
 trainer.train()
