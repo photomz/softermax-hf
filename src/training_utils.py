@@ -8,6 +8,8 @@ from torch.utils.data import Dataset, DataLoader
 import torch
 import numpy as np
 import pandas as pd
+import yaml
+import os
 
 from dataclasses import dataclass, field
 
@@ -252,9 +254,7 @@ class SofterTrainer(Trainer):
                     )
                 else:
                     metrics = self.compute_metrics({"loss": losses, "predictions": logits, "label_ids": labels})
-                all_metrics = (
-                    metrics if all_metrics is None else nested_concat(all_metrics, metrics, padding_index=-100)
-                )
+                all_metrics = metrics if all_metrics is None else merge_metrics(all_metrics, metrics)
                 # Set back to None to begin a new accumulation
                 losses_host, preds_host, inputs_host, labels_host = None, None, None, None
 
@@ -284,7 +284,7 @@ class SofterTrainer(Trainer):
             metrics = self.compute_metrics(
                 {"loss": losses, "predictions": logits, "label_ids": labels},
             )
-        all_metrics = metrics if all_metrics is None else nested_concat(all_metrics, metrics, padding_index=-100)
+        all_metrics = metrics if all_metrics is None else merge_metrics(all_metrics, metrics)
         # To be JSON-serializable, we need to remove numpy types or zero-d tensors
         all_metrics = denumpify_detensorize(all_metrics)
 
@@ -306,6 +306,19 @@ class SofterTrainer(Trainer):
         # QoL change to log the learning rate as well, since default trainer does not
         logs["learning_rate"] = self._get_learning_rate()
         super().log(logs)
+
+
+def merge_metrics(all_metrics, metrics):
+    """
+    Helper function in evaluation_loop to concat calculated metrics in the dictionary together.
+    This will assume all the keys in metrics are the same as the keys in all_metrics.
+    Also realistically since all_metrics is a dict this function will be done in-place, but we also
+    return the dictionary since the code above was originally written out-place(?)
+    """
+
+    for key, value in all_metrics.items():
+        all_metrics[key] = value + metrics[key]
+    return all_metrics
 
 
 def compute_softermetrics(eval_preds: dict):
@@ -334,7 +347,7 @@ class WandbComputeMetricCallback(WandbCallback):
     couple dirty hacks and minor inefficiencies to get this to work properly.
     """
 
-    def __init__(self, trainer: Trainer, tokenizer: PreTrainedTokenizerBase, val_dataloader):
+    def __init__(self, config_filepath: str, trainer: Trainer, tokenizer: PreTrainedTokenizerBase, val_dataloader):
         """Initializes the WandbPredictionProgressCallback instance.
 
         Args:
@@ -343,11 +356,67 @@ class WandbComputeMetricCallback(WandbCallback):
             val_dataloader (Dataloader): The validation dataloader.
         """
         super().__init__()
+
+        with open(config_filepath) as stream:
+            try:
+                self.configs_yaml = yaml.safe_load(stream)
+            except yaml.YAMLError as exc:
+                print(exc)
+
         self.trainer = trainer
         self.tokenizer = tokenizer
         self.sample_dataset = next(iter(val_dataloader))
         # special_tokens_mask causes prediction_step to throw an error because the model forward pass doesn't recognise it
         self.sample_dataset.pop("special_tokens_mask", None)
+
+    def setup(self, args, state, model, **kwargs):
+        """
+        Mostly identical to the superclass implementation. Fixes a logging bug described below and adds param config.watch_freq
+        to allow better control over how often param and gradient histograms are logged.
+
+        there is a bug where the wandb configs we specify through the config files will be overridden by the TrainingArguments
+        if by coincidence they share the same config names, here we just replace them back to the specified config values
+        if not done, the config values will become TrainingArgument defaults (such as adam_beta1, etc.)
+        this bug is purely visual, the run still continues with specified arguments in the original config file
+        """
+        if self._wandb is None:
+            return
+        self._initialized = True
+        if state.is_world_process_zero:
+            logger.info(
+                'Automatic Weights & Biases logging enabled, to disable set os.environ["WANDB_DISABLED"] = "true"'
+            )
+            combined_dict = {**args.to_dict()}
+            if hasattr(model, "config") and model.config is not None:
+                model_config = model.config.to_dict()
+                combined_dict = {**model_config, **combined_dict}
+            trial_name = state.trial_name
+            init_args = {}
+            if trial_name is not None:
+                init_args["name"] = trial_name
+                init_args["group"] = args.run_name
+            else:
+                if not (args.run_name is None or args.run_name == args.output_dir):
+                    init_args["name"] = args.run_name
+
+            if self._wandb.run is None:
+                self._wandb.init(
+                    project=os.getenv("WANDB_PROJECT", "huggingface"),
+                    **init_args,
+                )
+            # add config parameters (run may have been created manually)
+            self._wandb.config.update(combined_dict, allow_val_change=True)
+
+            # define default x-axis (for latest wandb versions)
+            if getattr(self._wandb, "define_metric", None):
+                self._wandb.define_metric("train/global_step")
+                self._wandb.define_metric("*", step_metric="train/global_step", step_sync=True)
+
+            # keep track of model topology and gradients, unsupported on TPU
+            _watch_model = os.getenv("WANDB_WATCH", "false")
+            if not is_torch_tpu_available() and _watch_model in ("all", "parameters", "gradients"):
+                self._wandb.watch(model, log=_watch_model, log_freq=self._wandb.config.watch_freq)
+            self._wandb.run._label(code="transformers_trainer")
 
     def decode_predictions(self, logits, labels):
         labels = self.tokenizer.batch_decode(labels)

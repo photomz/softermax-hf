@@ -24,7 +24,7 @@
     ### softermax parameters ###
     n_bias :
         description:
-        value: 1
+        value: 0
 
     ### training configs ###
     batch_size:
@@ -60,6 +60,10 @@
         description: intervals before wandb logging
         value: 50
 
+    watch_freq:
+        description: intervals before wandb will log parameter and gradient histograms
+        value: 500
+
     mlm_probability:
         description: probability of mlm masking being applied to a train sequence token (if applicable)
         value: 0
@@ -67,31 +71,31 @@
     ### optimization parameters ###
     learning_rate:
         description: The inital peak learning rate for cosine annealing scheduler
-        value: 1.5e-4
+        value: 1.0e-6
 
     warmup_steps:
         description: The number of steps for warmup phase
-        value: 10.0e+3
+        value: 5.0e+3
 
     num_iter_per_restart:
         description: The number of iterations per hard restart
-        value: 30.0e+3
+        value: 95.0e+3
 
     peak_decay:
         description: This factor is multiplied by previous peak lr to determine current restarted peak lr
-        value: 0.5
+        value: 0.4
 
     weight_decay:
         description: The weight decay to apply (if not zero) to all layers except all bias and LayerNorm weights in AdamW optimizer.
-        value: 0.01
+        value: 0.001
 
     adam_beta1:
         description: The beta1 hyperparameter for the AdamW optimizer
-        value: 0.9
+        value: 0.7
 
     adam_beta2:
         description: The beta2 hyperparameter for the AdamW optimizer
-        value: 0.999
+        value: 0.8
 
     adam_epsilon:
         description: The epsilon hyperparameter for the AdamW optimizer
@@ -99,8 +103,8 @@
 
     hidden_dropout:
         description: Dropout for hidden layers
-        value: 0.1
+        value: 0.001
 
     attention_dropout:
         description: Dropout for attention
-        value: 0.1
+        value: 0.001
